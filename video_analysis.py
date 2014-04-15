@@ -3,26 +3,30 @@
 import cv2,cv
 import numpy as np
 import matplotlib.pyplot as plt
+import color_flow as cf
 
 
-def flow2hsv(flow, hsv, xSlice, ySlice):
-    mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-    hsv[ySlice, xSlice, 0] = ang*180/np.pi
-    hsv[ySlice, xSlice, 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
-
-
-cap = cv2.VideoCapture("../nominal2.MP4")
+# camera capture
 # cap = cv2.VideoCapture(1)
 
-startFrame, endFrame = (250, 400)
+cap = cv2.VideoCapture("../nominal2.MP4")
+startFrame, endFrame = (100, 300)
 
 # cap = cv2.VideoCapture("../2014-04-03-201007.avi")
-
 # startFrame,endFrame = 230,390
-# cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
+cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
 
 ret, frame1 = cap.read()
-prvs = cv2.cvtColor(frame1,cv2.COLOR_BGR2GRAY)
+prvs = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+
+imgH, imgW = np.shape(prvs)
+# offsetX, offsetY = (0.2*imgW), (0.2*imgH)
+offsetX, offsetY = 0, 0
+startY,stopY = (offsetY, imgH - offsetY)
+startX,stopX = (offsetX, imgW - offsetX)
+winSize = ((stopY-startY), (stopX-startX))
+ySlice = slice(startY, stopY)
+xSlice = slice(startX, stopX)
 
 # Set up figure for interactive plotting
 plt.ion()
@@ -37,17 +41,11 @@ txt = ax.annotate("Frame %5d" % startFrame,(0.05,0.05)
 hsv = np.zeros(list(prvs.shape)+[3],dtype=np.uint8)
 hsv[...,1] = 255
 
-imgH, imgW = np.shape(prvs)
-offsetX, offsetY = (0.3*imgW), (0.2*imgH)
-startY,stopY = (offsetY, imgH - offsetY)
-startX,stopX = (offsetX, imgW - offsetX)
-winSize = ((stopY-startY), (stopX-startX))
-ySlice = slice(startY,stopY)
-xSlice = slice(startX,stopX)
 
 # Set up region of interest
-roi = np.zeros_like(prvs,dtype=np.bool)
-roi[ySlice, xSlice] = True
+roi = np.zeros_like(prvs, dtype=np.bool)
+# roi[ySlice, xSlice] = True
+roi[:] = True
 
 # Set up a quiver plot for visualizing flow
 # skiplines = 25
@@ -82,13 +80,14 @@ for i in range(startFrame+1,endFrame):
     flow[mag < flowthresh, :] = 0
 
     # represent flow by hsv color values
-    flow2hsv(flow, hsv, xSlice, ySlice)
-    rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    # flow2hsv(flow, hsv, xSlice, ySlice)
+    fimg = cf.flowToColor(flow)
+    # rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     # rgb[~roi, :] = frame2[~roi, :]
-    frame2[roi & (hsv[..., 0] != 0), :] = rgb[roi & (hsv[..., 0] != 0), :]
+    frame2[roi & (mag > flowthresh), :] = fimg[roi & (mag > flowthresh), :]
 
     # update figure
-    disp.set_data(frame2)
+    disp.set_data(frame2[::4,::4,:])
     # q.set_UVC(flow[::skiplines,0],flow[::skiplines,1])
     txt.set_text("Frame %5d\n" % i
                  + "Flow Magnitude Range: (%f, %f)" % (flowmin, flowmax))
@@ -104,6 +103,11 @@ for i in range(startFrame+1,endFrame):
     prvs = nxt
 
 cap.release()
+
+plt.close()
+plt.ioff()
+del(hsv, prvs, nxt)
+
 # cv2.destroyAllWindows()
 
 
