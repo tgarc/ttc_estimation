@@ -117,7 +117,7 @@ def computeColor(u, v):
     k0 = np.int32(fk)                 # 1, 2, ..., ncols
 
     k1 = k0+1
-    k1[k1 == (ncols+1)] = 1
+    k1[k1 == ncols] = 1
 
     f = fk - k0
 
