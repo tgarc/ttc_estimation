@@ -7,16 +7,22 @@ import color_flow as cf
 
 
 # some initial parameters
-cropX = 0.2
-cropY = 0.2
+cropX = 0.1
+cropY = 0.1
 downSamp = 4
 
 # camera capture
 # cap = cv2.VideoCapture(1)
 
-cap = cv2.VideoCapture("../nominal2.MP4")
-startFrame, endFrame = (100, 180)
+# One of the most decent ones so far
+# cap = cv2.VideoCapture("../nominal2.MP4")
+# startFrame, endFrame = (100, 180)
 
+# comparable to the previous one
+cap = cv2.VideoCapture("../nominal.mp4")
+startFrame, endFrame = (25, 180)
+
+# Bad illumination variation in this one...
 # cap = cv2.VideoCapture("../2014-04-03-201007.avi")
 # startFrame,endFrame = 230,390
 
@@ -43,12 +49,12 @@ roi[ySlice, xSlice] = True
 # Set up figure for interactive plotting
 plt.ion()
 fig = plt.figure()
-# ax = fig.add_axes([0.1, 0.1, 0.8, 0.8])
 ax1 = fig.add_subplot(211); ax1.set_xticks([]); ax1.set_yticks([])
-ax2 = fig.add_subplot(212)
-ax2.grid(); ax2.set_ylabel("Max flow"); ax2.set_xlabel("Frame Number")
-graphdisp, = ax2.plot(startFrame,0,'m-o')
 imdisp = ax1.imshow(prvs[::downSamp,::downSamp])
+ax2 = fig.add_subplot(212)
+ax2.grid()
+ax2.set_ylabel("Max flow (px/frame)"); ax2.set_xlabel("Frame Number")
+graphdisp, = ax2.plot(startFrame,0,'m-o')
 # txt = ax1.annotate("Frame %5d" % startFrame,(0.3,0.9)
 #                   ,xycoords="figure fraction")
 fig.tight_layout()
@@ -59,10 +65,11 @@ params = {'pyr_scale': 0.5, 'levels': 2, 'winsize': 30, 'iterations': 20
           ,'poly_n': 5, 'poly_sigma': 1.1
           ,'flags': cv2.OPTFLOW_USE_INITIAL_FLOW, 'flow': flow}
 
+flowVals = np.zeros(endFrame - startFrame)
+frameIdx = np.arange(endFrame - startFrame)+startFrame
 # i = 0
 # while(1):
     # i += 1
-flowVals = np.zeros(1000)
 for i in range(startFrame+1,endFrame):
     # frame2 = cv2.imread("../beyond_pixels_matlab-code_celiu/car2.jpg")    
     ret, frame2 = cap.read()
@@ -89,20 +96,20 @@ for i in range(startFrame+1,endFrame):
     # frame2[ySlice, xSlice, :] = fimg
 
     # update figure
-    
     imdisp.set_data(frame2[::downSamp,::downSamp,:])
-    flowVals[i-startFrame-1] = np.max(mag)
-    ax2.plot(np.arange(i-startFrame)+startFrame, flowVals[:i-startFrame],'m-o')
+
+    wind = np.append(flowVals[max(0,i-startFrame-3):i-startFrame], np.max(mag))
+    flowVals[i-startFrame-1] = np.median(wind)
+    graphdisp.set_data(frameIdx[:i-startFrame], flowVals[:i-startFrame])
     if ~(i % 5):
-        ax2.set_ylim((min(flowVals), max(flowVals)))
-        ax2.set_xlim((startFrame, i))   
+        ax2.relim(); ax2.autoscale_view() # autoscale axes        
     # txt.set_text("Frame %5d" % i
     #              + "Flow Magnitude Range: (%f, %f)" % (flowmin, flowmax))
     fig.canvas.draw()
 
     # check for user input
     k = cv2.waitKey(30) & 0xff
-    if k == 27:
+    if k == ord('q'):
         break
     elif k == ord('s'):
         cv2.imwrite('opticalfb_frame%d.png' % i, frame2)
