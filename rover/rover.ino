@@ -33,7 +33,7 @@
 
 #define OFF		0
 #define SLOW		120
-#define NORM		180
+#define NORM		160
 #define FAST		255
 
 // Change these two numbers to the pins connected to your encoder.
@@ -81,7 +81,7 @@ void loop() {
   if (digitalRead(PUSHBTN) == LOW)
   {
     i = 0;
-    delay(200);    
+    delay(200);
     do {
       // determine the control point :p
       potVal = analogRead(POT);
@@ -89,7 +89,7 @@ void loop() {
       /* Serial.println(i++); */
       if (out < SLOW)		out = 0;
       else if (out < NORM)	out = SLOW;
-      else if (out < FAST)	out = NORM;
+      else if (out < (FAST-30))	out = NORM;
       else          		out = FAST;
 
       // set the speed

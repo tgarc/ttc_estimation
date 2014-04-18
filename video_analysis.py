@@ -4,124 +4,198 @@ import cv2,cv
 import numpy as np
 import matplotlib.pyplot as plt
 import color_flow as cf
+import sys
 
+if __name__ == "__main__":
+    import optparse
 
-# some initial parameters
-cropX = 0.1
-cropY = 0.1
-downSamp = 4
+    parser = optparse.OptionParser(usage="video_analysis.py [options]")
 
-# camera capture
-# cap = cv2.VideoCapture(1)
+    parser.add_option("--video", dest="video"
+                      , action="store_true", default=False
+                      , help="Process a video file specified in args.")
+    parser.add_option("--image", dest="image"
+                      , action="store_true", default=False
+                      , help="Use a sequence of images to process specified by args.")
+    parser.add_option("--capture", dest="capture"
+                      , action="store_true", default=False
+                      , help="Use camera ID from args to process directly" \
+                      + "from camera stream.")    
+    parser.add_option("-o", "--output", dest="output", default=None
+                      , help="File to output numerical results from analysis.")
+    # parser.add_option("--numframes", dest="numframes"
+    #                   ,type="int", default=None
+    #                   ,help="Number of frames to process.")
+    # parser.add_option("--frameoffset", dest="offset"
+    #                   ,type="int", default=0
+    #                   ,help="Start processing after [offset] frames.")
+    parser.add_option("-c", "--crop", dest="crop"
+                      , type=float, default=0.1
+                      , help="Fraction of image to crop out of analysis.")
+    parser.add_option("--start", dest="start"
+                      , type="int", default=0
+                      , help="Starting frame number for analysis.")
+    parser.add_option("--stop", dest="stop"
+                      , type="int", default=None
+                      , help="Stop frame number for analysis.")    
+    parser.add_option("--decimate", dest="decimate"
+                      , type="int", default=1
+                      , help="Rate at which to downsample image for display.")    
+    parser.add_option("-s", "--show", dest="show"
+                      , action="store_true", default=False
+                      ,help="Show results of analysis in real time.")
+    parser.add_option("--vis", dest="vis"
+                      , type="str", default="color"
+                      , help="Method for flow visualization.")
+    parser.add_option("-q", "--quiet", dest="quiet"
+                      , action="store_true", default=False
+                      , help="Suppress printing verbose output.")
+
+    (opts, args) = parser.parse_args()
+    if opts.video:
+        cap = cv2.VideoCapture(args[0])
+        
+        startFrame = opts.start
+        if opts.stop is None:
+            endFrame = cap.get(cv.CV_CAP_PROP_FRAME_COUNT)
+        else:
+            endFrame = opts.stop
+        if startFrame != 0:
+            cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
+        ret, frame1 = cap.read()
+    elif opts.capture:
+        cap = cv2.VideoCapture(args[0])
+        startFrame, endFrame = 0, 100
+        ret, frame1 = cap.read()
+    elif opts.image:
+        exit("No support currently")
+        cap = (cv2.imread(imgpath) for imgpath in args)
+        frame1 = cap.next()
+        # frame1 = cv2.imread("../beyond_pixels_matlab-code_celiu/car1.jpg")
+    else:
+        exit("No input mode selected!")
 
 # One of the most decent ones so far
 # cap = cv2.VideoCapture("../nominal2.MP4")
 # startFrame, endFrame = (100, 180)
 
 # comparable to the previous one
-cap = cv2.VideoCapture("../nominal.mp4")
-startFrame, endFrame = (25, 180)
+# cap = cv2.VideoCapture("../nominal.mp4")
+# startFrame, endFrame = (25, 180)
 
 # Bad illumination variation in this one...
 # cap = cv2.VideoCapture("../2014-04-03-201007.avi")
 # startFrame,endFrame = 230,390
 
-cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
 
 # frame1 = cv2.imread("../beyond_pixels_matlab-code_celiu/car1.jpg")
 # startFrame, endFrame = (0, 2)
-ret, frame1 = cap.read()
-prvs = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
-del(frame1)
 
-# set up parameters for easy indexing into image
-imgH,   imgW    = np.shape(prvs)
-offsetX,offsetY = (int(cropX*imgW), int(cropY*imgH))
-startY, stopY   = (offsetY, imgH - offsetY)
-startX, stopX   = (offsetX, imgW - offsetX)
-winSize         = ((stopY-startY), (stopX-startX))
-xSlice, ySlice  = (slice(startX, stopX), slice(startY, stopY))
+    prvs = cv2.cvtColor(frame1, cv2.COLOR_BGR2GRAY)
+    del(frame1)
 
-# Set up region of interest
-roi = np.zeros_like(prvs, dtype=np.bool)
-roi[ySlice, xSlice] = True
+    # set up parameters for easy indexing into image
+    imgH,   imgW    = np.shape(prvs)
+    offsetX,offsetY = (int(opts.crop*imgW), int(opts.crop*imgH))
+    startY, stopY   = (offsetY, imgH - offsetY)
+    startX, stopX   = (offsetX, imgW - offsetX)
+    winSize         = ((stopY-startY), (stopX-startX))
+    xSlice, ySlice  = (slice(startX, stopX), slice(startY, stopY))
 
-# Set up figure for interactive plotting
-plt.ion()
-fig = plt.figure()
-ax1 = fig.add_subplot(211); ax1.set_xticks([]); ax1.set_yticks([])
-imdisp = ax1.imshow(prvs[::downSamp,::downSamp])
-ax2 = fig.add_subplot(212)
-ax2.grid()
-ax2.set_ylabel("Max flow (px/frame)"); ax2.set_xlabel("Frame Number")
-graphdisp, = ax2.plot(startFrame,0,'m-o')
-# txt = ax1.annotate("Frame %5d" % startFrame,(0.3,0.9)
-#                   ,xycoords="figure fraction")
-fig.tight_layout()
+    # Set up region of interest
+    roi = np.zeros_like(prvs, dtype=np.bool)
+    roi[ySlice, xSlice] = True
 
-# Set up parameters for OF calculation
-flow = np.zeros(winSize)
-params = {'pyr_scale': 0.5, 'levels': 2, 'winsize': 30, 'iterations': 20
-          ,'poly_n': 5, 'poly_sigma': 1.1
-          ,'flags': cv2.OPTFLOW_USE_INITIAL_FLOW, 'flow': flow}
+    # Set up figure for interactive plotting
+    if opts.show:
+        plt.ion()
+        fig = plt.figure()
+        ax1 = fig.add_subplot(211); ax1.set_xticks([]); ax1.set_yticks([])
+        imdisp = ax1.imshow(prvs[::opts.decimate,::opts.decimate])
+        ax2 = fig.add_subplot(212)
+        ax2.grid()
+        ax2.set_ylabel("Max flow (px/frame)"); ax2.set_xlabel("Frame Number")
+        graphdisp, = ax2.plot(startFrame,0,'m-o')
+        # txt = ax1.annotate("Frame %5d" % startFrame,(0.3,0.9)
+        #                   ,xycoords="figure fraction")
+        fig.tight_layout()
 
-flowVals = np.zeros(endFrame - startFrame)
-frameIdx = np.arange(endFrame - startFrame)+startFrame
-# i = 0
-# while(1):
-    # i += 1
-for i in range(startFrame+1,endFrame):
-    # frame2 = cv2.imread("../beyond_pixels_matlab-code_celiu/car2.jpg")    
-    ret, frame2 = cap.read()
-    nxt = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-    # nxt = cv2.GaussianBlur(nxt,(15,15),sigmaX=1.5)
+        if opts.vis == "quiver":
+            skiplines = 30
+            Y, X = np.meshgrid(np.arange(startY,stopY,skiplines), np.arange(startX,stopX,skiplines))
+            q = ax1.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
+                           , scale=0.5, units='x', color='cyan', alpha=0.5
+                           , pivot='tail', linewidth = 1.5)
 
-    flow = cv2.calcOpticalFlowFarneback(prvs[roi].reshape(winSize)
-                                        , nxt[roi].reshape(winSize)
-                                        , **params)
-    params['flow'] = flow  # save current flow values for next call
+    # Set up parameters for OF calculation
+    flow = np.zeros(winSize)
+    params = {'pyr_scale': 0.5, 'levels': 4, 'winsize': 15, 'iterations': 30
+              ,'poly_n': 5, 'poly_sigma': 1.1
+              ,'flags': cv2.OPTFLOW_USE_INITIAL_FLOW, 'flow': flow}
 
-    # zero out smallest X% of flow values
-    mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
-    flowmax, flowmin = (np.max(mag), np.min(mag))
-    flowthresh = 0.01*(flowmax-flowmin)
-    flow[mag < flowthresh, :] = 0
+    flowVals = np.zeros(endFrame - startFrame)
+    frameIdx = np.arange(endFrame - startFrame)+startFrame
+    # i = 0
+    # while(1):
+    #     i += 1
+    for i in range(startFrame+1,endFrame):
+        if not opts.quiet:
+            sys.stdout.write("Processing frame %d...\r" % i)
+            sys.stdout.flush()
+        # frame2 = cv2.imread("../beyond_pixels_matlab-code_celiu/car2.jpg")    
+        ret, frame2 = cap.read()
+        nxt = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
+        # nxt = cv2.GaussianBlur(nxt,(15,15),sigmaX=1.5)
 
-    # represent flow angle and magnitude by color values
-    
-    fimg = cf.flowToColor(flow)
-    troi = np.copy(roi)
-    troi[ySlice,xSlice] &= mag > flowthresh
-    frame2[troi, :] = fimg[mag > flowthresh, :]
-    # frame2[ySlice, xSlice, :] = fimg
+        flow = cv2.calcOpticalFlowFarneback(prvs[roi].reshape(winSize)
+                                            , nxt[roi].reshape(winSize)
+                                            , **params)
+        params['flow'] = flow  # save current flow values for next call
 
-    # update figure
-    imdisp.set_data(frame2[::downSamp,::downSamp,:])
+        # zero out smallest X% of flow values
+        mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
+        flowmax, flowmin = (np.max(mag), np.min(mag))
+        flowthresh = 0.01*(flowmax-flowmin)
+        flow[mag < flowthresh, :] = 0
 
-    wind = np.append(flowVals[max(0,i-startFrame-3):i-startFrame], np.max(mag))
-    flowVals[i-startFrame-1] = np.median(wind)
-    graphdisp.set_data(frameIdx[:i-startFrame], flowVals[:i-startFrame])
-    if ~(i % 5):
-        ax2.relim(); ax2.autoscale_view() # autoscale axes        
-    # txt.set_text("Frame %5d" % i
-    #              + "Flow Magnitude Range: (%f, %f)" % (flowmin, flowmax))
-    fig.canvas.draw()
+        if opts.show:  
+            # represent flow angle and magnitude by color values
+            if opts.vis == "color":
+                fimg = cf.flowToColor(flow)
+                troi = np.copy(roi)
+                troi[ySlice,xSlice] &= mag > flowthresh
+                frame2[troi, :] = fimg[mag > flowthresh, :]
+                # frame2[ySlice, xSlice, :] = fimg
+            elif opts.vis == "quiver":
+                q.set_UVC(flow[::skiplines,0],flow[::skiplines,1])
 
-    # check for user input
-    k = cv2.waitKey(30) & 0xff
-    if k == ord('q'):
-        break
-    elif k == ord('s'):
-        cv2.imwrite('opticalfb_frame%d.png' % i, frame2)
-        cv2.imwrite('opticalhsv_frame%d.png' % i, rgb)
-    prvs = nxt
+            # update figure
+            imdisp.set_data(frame2[::opts.decimate,::opts.decimate,:])
+            wind = np.append(flowVals[max(0,i-startFrame-3):i-startFrame], np.max(mag))
+            flowVals[i-startFrame-1] = np.median(wind)
+            graphdisp.set_data(frameIdx[:i-startFrame], flowVals[:i-startFrame])
+            if ~(i % 5):
+                ax2.relim(); ax2.autoscale_view() # autoscale axes        
+            # txt.set_text("Frame %5d" % i
+            #              + "Flow Magnitude Range: (%f, %f)" % (flowmin, flowmax))
+            fig.canvas.draw()
 
-raw_input("Exit?")
+            # check for user input
+            k = cv2.waitKey(30) & 0xff
+            if k == ord('q'):
+                break
+            elif k == ord('s'):
+                cv2.imwrite('opticalfb_frame%d.png' % i, frame2)
+                cv2.imwrite('opticalhsv_frame%d.png' % i, rgb)
+        prvs = nxt
 
-cap.release()
-plt.close()
-plt.ioff()
-del(prvs, nxt)
+    if opts.show:
+        raw_input("Exit?")
+
+    cap.release()
+    plt.close()
+    plt.ioff()
+    del(prvs, nxt)
 
 # cv2.destroyAllWindows()
 
@@ -160,11 +234,4 @@ del(prvs, nxt)
 # rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 # rgb[~roi, :] = frame2[~roi, :]
 
-# Set up a quiver plot for visualizing flow
-# skiplines = 25
-# Y, X = np.meshgrid(np.arange(startY,stopY,skiplines), np.arange(startX,stopX,skiplines))
-# q = ax1.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
-#               , scale=0.5, units='x', color='cyan', alpha=0.5
-#               , pivot='middle')
-    # q.set_UVC(flow[::skiplines,0],flow[::skiplines,1])
 
