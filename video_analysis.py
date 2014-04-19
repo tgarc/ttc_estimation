@@ -12,15 +12,14 @@ if __name__ == "__main__":
     parser = optparse.OptionParser(usage="video_analysis.py [options]")
 
     parser.add_option("--video", dest="video"
-                      , action="store_true", default=False
-                      , help="Process a video file specified in args.")
+                      , type="str", default=None
+                      , help="Video file to process.")
     parser.add_option("--image", dest="image"
                       , action="store_true", default=False
                       , help="Use a sequence of images to process specified by args.")
     parser.add_option("--capture", dest="capture"
-                      , action="store_true", default=False
-                      , help="Use camera ID from args to process directly" \
-                      + "from camera stream.")    
+                      , type="int", default=None
+                      , help="Capture directly camera with given camera ID")
     parser.add_option("-o", "--output", dest="output", default=None
                       , help="File to output numerical results from analysis.")
     # parser.add_option("--numframes", dest="numframes"
@@ -52,8 +51,8 @@ if __name__ == "__main__":
                       , help="Suppress printing verbose output.")
 
     (opts, args) = parser.parse_args()
-    if opts.video:
-        cap = cv2.VideoCapture(args[0])
+    if opts.video is not None:
+        cap = cv2.VideoCapture(opts.video)
         
         startFrame = opts.start
         if opts.stop is None:
@@ -63,8 +62,9 @@ if __name__ == "__main__":
         if startFrame != 0:
             cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
         ret, frame1 = cap.read()
-    elif opts.capture:
-        cap = cv2.VideoCapture(args[0])
+    elif opts.capture is not None:
+        opts.show = True
+        cap = cv2.VideoCapture(opts.capture)
         startFrame, endFrame = 0, 100
         ret, frame1 = cap.read()
     elif opts.image:

@@ -6,13 +6,13 @@
 
 #include <Encoder.h>
 
-#define CH1_ENC1	A4
+#define CH1_ENC1	2 //A4
 #define CH1_ENC2	A5
-#define CH1_INT 	2
+#define CH1_INT 	-1 //2
 
-#define CH4_ENC1	A2
+#define CH4_ENC1	3 //A2
 #define CH4_ENC2	A3
-#define CH4_INT 	3
+#define CH4_INT 	-1 //3
 
 #define CH1_PWM		6
 #define CH1_DIR		7
@@ -74,53 +74,54 @@ long newPosition2 = -999;
 int potVal = 0;
 int oldPotVal = 1;
 int out = 0;
-int motorDisabled = 0;
+int motorDisabled = 1;
 int i;
 
 void loop() {
   if (digitalRead(PUSHBTN) == LOW)
   {
-    i = 0;
-    delay(200);
-    do {
+    motorDisabled = !motorDisabled;
+    /* i = 0; */
+    /* delay(200); */
+    /* do { */
       // determine the control point :p
-      potVal = analogRead(POT);
-      out = map(potVal, 0, 1023, 0, 255);
-      /* Serial.println(i++); */
-      if (out < SLOW)		out = 0;
-      else if (out < NORM)	out = SLOW;
-      else if (out < (FAST-30))	out = NORM;
-      else          		out = FAST;
+    // set the speed
+    /* } while(digitalRead(PUSHBTN) == HIGH); */
 
-      // set the speed
-      analogWrite(CH1_PWM,out);
-      analogWrite(CH2_PWM,out);
-      analogWrite(CH3_PWM,out);
-      analogWrite(CH4_PWM,out);
-    } while(digitalRead(PUSHBTN) == HIGH);
+    // wait a while to read button again
+    /* delay(200); */
+  }
 
-    // turn off motors
+  potVal = analogRead(POT);
+  out = map(potVal, 0, 1023, 0, 255);
+  /* Serial.println(i++); */
+  if (out < SLOW)		out = 0;
+  else if (out < NORM)	out = SLOW;
+  else if (out < (FAST-30))	out = NORM;
+  else          		out = FAST;
+
+  if (!motorDisabled) {
+    analogWrite(CH1_PWM,out);
+    analogWrite(CH2_PWM,out);
+    analogWrite(CH3_PWM,out);
+    analogWrite(CH4_PWM,out);
+  }
+  else {
     analogWrite(CH1_PWM,0);
     analogWrite(CH2_PWM,0);
     analogWrite(CH3_PWM,0);
     analogWrite(CH4_PWM,0);
-
-    // wait a while to read button again
-    delay(200);
   }
-
 
   newPosition = enc1.read();
   newPosition2 = enc4.read();
-  if (newPosition != oldPosition)
+  if (newPosition != oldPosition or newPosition2 != oldPosition2)
   {
-    oldPosition = newPosition;
-    Serial.println(newPosition);
+    Serial.print(newPosition);
+    Serial.print(",");
+    Serial.println(newPosition2);
+    if (newPosition != oldPosition) {oldPosition = newPosition;}
+    if (newPosition2 != oldPosition2) {oldPosition2 = newPosition2;}
   }
-  if (newPosition2 != oldPosition2)
-  {
-    oldPosition2 = newPosition2;    
-    Serial.print(", "); Serial.println(newPosition2);
-  }  
-
+  delay(10);
 }
