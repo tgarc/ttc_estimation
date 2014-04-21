@@ -6,15 +6,61 @@ import matplotlib.pyplot as plt
 import color_flow as cf
 import sys
 
+
+pause = False
+
+
+def onkey(event):
+    global pause
+    pause = ~pause
+    print "Pause:",pause
+
+
+def threshold_flow(flow):
+    mag = np.sqrt(flow[...,0]**2 + flow[...,1]**2)
+    flowmax, flowmin = (np.max(mag), np.min(mag))
+    flowthresh_low = 0.01*(flowmax-flowmin)
+    flowthresh_high = 0.99*(flowmax-flowmin)    
+    flow[(mag < flowthresh_low) | (mag > flowthresh_high), :] = 0
+
+    return flowthresh_low, mag
+
+
+def setup_plot(img, showGraph=True):
+    plt.ion()
+    fig = plt.figure()
+    ax1 = fig.add_subplot(211); ax1.set_xticks([]); ax1.set_yticks([])
+    imdisp = ax1.imshow(img)
+    ax2 = fig.add_subplot(212)
+    ax2.grid()
+    ax2.set_ylabel("Max flow (px/frame)"); ax2.set_xlabel("Frame Number")
+    graphdisp, = ax2.plot([],[],'m-o')
+    fig.tight_layout()
+
+    cid = fig.canvas.mpl_connect('key_press_event', onkey)
+
+    return fig, imdisp, graphdisp
+
+
+def setup_quiver(axis, Xspan=None, Yspan=None, skiplines=30):
+    startY, stopY = Yspan
+    startX, stopX = Xspan
+    Y, X = np.mgrid[startY:stopY:skiplines, startX:stopX:skiplines]
+    q = axis.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
+                    , scale=1, units='x', alpha=0.5
+                    , edgecolor='k'
+                    , linewidth=0.5, facecolor='cyan')
+    return X, Y, q
+
+
 def main(cap, startFrame, endFrame, verbose=True, vis="color", decimate=2
-         , crop=0.1, show=True, plot=True, frameAverage=2):
+         , crop=0.1, show=True, plot=True, frameAverage=1):
     frames = []
     for i in range(frameAverage):
         frames.append(cv2.cvtColor(cap.read()[1], cv2.COLOR_BGR2GRAY))
     flowDataLen = endFrame - startFrame - 1 - (frameAverage-1)
     flowStartFrame = startFrame + 1 + (frameAverage-1)
     frameShape = frames[0].shape
-    
 
     # set up parameters for easy indexing into image
     imgH,   imgW    = frameShape
@@ -30,22 +76,14 @@ def main(cap, startFrame, endFrame, verbose=True, vis="color", decimate=2
 
     # Set up figure for interactive plotting
     if show:
-        plt.ion()
-        fig = plt.figure()
-        ax1 = fig.add_subplot(211); ax1.set_xticks([]); ax1.set_yticks([])
-        imdisp = ax1.imshow(frames[0][::decimate,::decimate])
-        ax2 = fig.add_subplot(212)
-        ax2.grid()
-        ax2.set_ylabel("Max flow (px/frame)"); ax2.set_xlabel("Frame Number")
-        graphdisp, = ax2.plot(startFrame,0,'m-o')
-        fig.tight_layout()
-
+        fig, imdisp, graphdisp = setup_plot(frames[0], showGraph=plot)
+        ax1, ax2 = fig.axes
         if vis == "quiver":
             skiplines = 30
-            Y, X = np.meshgrid(np.arange(startY,stopY,skiplines), np.arange(startX,stopX,skiplines))
-            q = ax1.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
-                           , scale=0.5, units='x', color='cyan', alpha=0.5
-                           , pivot='tail', linewidth = 1.5)
+            X, Y, q = setup_quiver(ax1
+                                   , Xspan=(startX, stopX)
+                                   , Yspan=(startY, stopY)
+                                   , skiplines=skiplines)
 
     # Set up parameters for OF calculation
     flow = np.zeros(winSize)
@@ -55,6 +93,7 @@ def main(cap, startFrame, endFrame, verbose=True, vis="color", decimate=2
               ,'flags': cv2.OPTFLOW_USE_INITIAL_FLOW, 'flow': flow}
 
     frameIdx = np.arange(flowDataLen) + flowStartFrame
+    global pause
     for i in range(flowStartFrame, endFrame):
         if verbose:
             sys.stdout.write("Processing frame %d...\r" % i)
@@ -62,11 +101,11 @@ def main(cap, startFrame, endFrame, verbose=True, vis="color", decimate=2
         # frame2 = cv2.imread("../beyond_pixels_matlab-code_celiu/car2.jpg")    
         ret, currFrameClr = cap.read()
 
+        while(pause): None
+
         currFrame = cv2.cvtColor(currFrameClr, cv2.COLOR_BGR2GRAY)
-        prvs = sum(frames[:-1])   # sum along frames
-        nxt = frames[-1] + currFrame
-        # nxt = cv2.cvtColor(frame2, cv2.COLOR_BGR2GRAY)
-        # nxt = cv2.GaussianBlur(nxt,(15,15),sigmaX=1.5)
+        prvs = sum(frames)
+        nxt = sum(frames[1:]) + currFrame
 
         flow = cv2.calcOpticalFlowFarneback(prvs[roi].reshape(winSize)
                                             , nxt[roi].reshape(winSize)
@@ -74,51 +113,36 @@ def main(cap, startFrame, endFrame, verbose=True, vis="color", decimate=2
         params['flow'] = flow  # save current flow values for next call
 
         # zero out smallest X% of flow values
-        mag = np.sqrt(flow[..., 0]**2 + flow[..., 1]**2)
-        flowmax, flowmin = (np.max(mag), np.min(mag))
-        flowthresh = 0.01*(flowmax-flowmin)
-        flow[mag < flowthresh, :] = 0
+        flowthresh, mag = threshold_flow(flow)
+
+        # wind = np.append(flowVals[max(0,i-flowStartFrame-3):i-flowStartFrame]
+        #                  , np.max(mag))
+        flowVals[i-flowStartFrame] = np.max(mag)
 
         if show:  
             # represent flow angle and magnitude by color values
+            # update_figure(imdisp, currFrameClr, troi, graphdisp)
             if vis == "color":
                 fimg = cf.flowToColor(flow)
                 troi = np.copy(roi)
-                troi[ySlice,xSlice] &= mag > flowthresh
-                currFrameClr[troi, :] = fimg[mag > flowthresh, :]
-                # frame2[ySlice, xSlice, :] = fimg
+                troi[ySlice,xSlice] = (mag > flowthresh)
+                currFrameClr[troi, :] = fimg[mag > flowthresh,:]
+                imdisp.set_data(currFrameClr[::decimate, ::decimate, :])
             elif vis == "quiver":
-                q.set_UVC(flow[::skiplines,0],flow[::skiplines,1])
-
-            # update figure
-            imdisp.set_data(currFrameClr[::decimate,::decimate,:])
-
-            wind = np.append(flowVals[max(0,i-flowStartFrame-3):i-flowStartFrame]
-                             , np.max(mag))
-            flowVals[i-flowStartFrame] = np.max(mag)
-            
+                q.set_UVC(flow[::skiplines,::skiplines,0][::decimate]
+                          ,flow[::skiplines,::skiplines,1][::decimate])
+                imdisp.set_data(currFrameClr[::decimate, ::decimate, :])
             if plot:
                 graphdisp.set_data(frameIdx[:i-flowStartFrame+1]
                                    , flowVals[:i-flowStartFrame+1])
-                if ~(i % 5):
-                    # ax2.relim()
-                    # ax2.autoscale_view() # autoscale axes
-                    ax2.set_xlim(i-10,i)
-                    try:
-                        ax2.set_ylim(min(flowVals[i-flowStartFrame-10:i-flowStartFrame+1])-3
-                                     , max(flowVals[i-flowStartFrame-10:i-flowStartFrame+1])+3)
-                    except:
-                        pass
-
+                if (i % 5) == 0:
+                    if i>10: ax2.set_xlim(i-8,i+8)
+                    ax2.relim()
+                    ax2.autoscale_view() # autoscale axes
+                    # ax2.set_ylim(min(flowVals[i-flowStartFrame-10:i-flowStartFrame+1])-3
+                    #              , max(flowVals[i-flowStartFrame-10:i-flowStartFrame+1])+3)
             fig.canvas.draw()
-
-            # check for user input
-            k = cv2.waitKey(30) & 0xff
-            if k == ord('q'):
-                break
-            elif k == ord('s'):
-                cv2.imwrite('opticalfb_frame%d.png' % i, frame3)
-                cv2.imwrite('opticalhsv_frame%d.png' % i, fimg)
+            
         frames[:-1] = frames[1:]  # drop the oldest frame
         frames[-1] = currFrame   # and add this one
 
@@ -144,12 +168,6 @@ if __name__ == "__main__":
                       , help="Capture directly camera with given camera ID")
     parser.add_option("-o", "--output", dest="output", default=None
                       , help="File to output numerical results from analysis.")
-    # parser.add_option("--numframes", dest="numframes"
-    #                   ,type="int", default=None
-    #                   ,help="Number of frames to process.")
-    # parser.add_option("--frameoffset", dest="offset"
-    #                   ,type="int", default=0
-    #                   ,help="Start processing after [offset] frames.")
     parser.add_option("-c", "--crop", dest="crop"
                       , type=float, default=0.1
                       , help="Fraction of image to crop out of analysis.")
@@ -158,7 +176,10 @@ if __name__ == "__main__":
                       , help="Starting frame number for analysis.")
     parser.add_option("--stop", dest="stop"
                       , type="int", default=None
-                      , help="Stop frame number for analysis.")    
+                      , help="Stop frame number for analysis.")
+    parser.add_option("--frame-average", dest="frameavg"
+                      , type="int", default=1
+                      , help="Use a running average over [frame-average] frames.")
     parser.add_option("--decimate", dest="decimate"
                       , type="int", default=1
                       , help="Rate at which to downsample image for display.")    
@@ -178,18 +199,15 @@ if __name__ == "__main__":
     (opts, args) = parser.parse_args()
     if opts.video is not None:
         cap = cv2.VideoCapture(opts.video)
-        
         startFrame = opts.start
-        if opts.stop is None:
-            endFrame = cap.get(cv.CV_CAP_PROP_FRAME_COUNT)
-        else:
-            endFrame = opts.stop
-        if startFrame != 0:
-            cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
+        endFrame = int(cap.get(cv.CV_CAP_PROP_FRAME_COUNT)) \
+                   if opts.stop is None else opts.stop
+        if startFrame != 0: cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
     elif opts.capture is not None:
         opts.show = True
         cap = cv2.VideoCapture(opts.capture)
-        startFrame, endFrame = 0, 100
+        startFrame = 0
+        endFrame = 100 if opts.stop is None else opts.stop
     elif opts.image:
         exit("No support currently")
         cap = (cv2.imread(imgpath) for imgpath in args)
@@ -199,10 +217,13 @@ if __name__ == "__main__":
         exit("No input mode selected!")
 
     frameIdx, maxFlowVals = main(cap, startFrame, endFrame
-                                 , verbose=not opts.quiet, vis=opts.vis
-                                 , crop=opts.crop, show=opts.show
+                                 , verbose=not opts.quiet
+                                 , vis=opts.vis
+                                 , crop=opts.crop
+                                 , show=opts.show
                                  , decimate=opts.decimate
-                                 , plot=opts.plot)
+                                 , plot=opts.plot
+                                 , frameAverage=opts.frameavg)
 
     if opts.show:
         raw_input("Exit?")

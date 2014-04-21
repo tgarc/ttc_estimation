@@ -102,13 +102,13 @@ void loop() {
 
   if (!motorDisabled) {
     analogWrite(CH1_PWM,out);
-    analogWrite(CH2_PWM,out);
-    analogWrite(CH3_PWM,out);
+    /* analogWrite(CH2_PWM,out); */
+    /* analogWrite(CH3_PWM,out); */
     analogWrite(CH4_PWM,out);
   }
   else {
     analogWrite(CH1_PWM,0);
-    analogWrite(CH2_PWM,0);
+    /* analogWrite(CH2_PWM,0); */
     analogWrite(CH3_PWM,0);
     analogWrite(CH4_PWM,0);
   }
