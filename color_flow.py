@@ -36,6 +36,17 @@ import numpy as np
 import cv2
 
 
+def colorFlow(flow, colorframe, ySlice=None, xSlice=None, flowmask=None):
+    fimg = flowToColor(flow)
+
+    if ySlice is None or xSlice is None:
+        colorframe = fimg # doesn't actually copy image...how to fix?
+    elif flowmask is not None:
+        colorframe[ySlice, xSlice, :][flowmask, :] = fimg[flowmask]
+    else:
+        colorframe[ySlice, xSlice, :] = fimg
+
+
 def flow2hsv(flow, hsv, xSlice, ySlice):
     mag, ang = cv2.cartToPolar(flow[..., 0], flow[..., 1])
     hsv[ySlice, xSlice, 0] = ang*180/np.pi
