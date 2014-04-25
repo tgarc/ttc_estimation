@@ -36,12 +36,10 @@ import numpy as np
 import cv2
 
 
-def colorFlow(flow, colorframe, ySlice=None, xSlice=None, flowmask=None):
+def colorFlow(flow, colorframe, xSlice, ySlice, flowmask=None):
     fimg = flowToColor(flow)
 
-    if ySlice is None or xSlice is None:
-        colorframe = fimg # doesn't actually copy image...how to fix?
-    elif flowmask is not None:
+    if flowmask is not None:
         colorframe[ySlice, xSlice, :][flowmask, :] = fimg[flowmask]
     else:
         colorframe[ySlice, xSlice, :] = fimg

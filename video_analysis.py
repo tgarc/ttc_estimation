@@ -54,36 +54,60 @@ def threshold_flow(flow):
 
 def init():
     imdisp.set_data(framegrabber.next())
-    graphdisp.set_data([], [])
-    ax2.set_xlim(0,16)
+    # l_latdiv, = ax2.plot([],[],'-o', color='m')
+    # l_verdiv, = ax3.plot([],[],'-o', color='orange')
+    # l_ttc, = ax4.plot([],[],'-o', color='g')
+    b_latdiv.set_height(0)
+    b_verdiv.set_height(0)
+    b_ttc.set_height(0)
+    # txt.set_text("Frame %d of %d" % (flowStartFrame, endFrame))
+    
+    # update = [imdisp,l_latdiv,l_verdiv,l_ttc]
+    update = [imdisp, b_ttc, b_verdiv, b_ttc]  
+
+    # for ax in (ax2,ax3,ax4): ax.set_xlim(0,16)
 
     if opts.vis == "quiver":
         q.set_UVC([],[])
-        return graphdisp, imdisp, q
+        update.append(q)
 
-    return graphdisp, imdisp
+    return update
 
 
-def setup_plot(img, showGraph=True):
-    # plt.ion()
+def setup_plot(img):
     fig = plt.figure()
-    ax1 = fig.add_subplot((1+showGraph),1,1); ax1.set_xticks([]); ax1.set_yticks([])
-    imdisp = ax1.imshow(img,plt.cm.gray)
+    # ax1 = plt.subplot2grid((3,3), (0, 0), colspan=3, rowspan=2)
+    # ax2 = plt.subplot2grid((3,3), (2, 0))
+    # ax3 = plt.subplot2grid((3,3), (2, 1))
+    # ax4 = plt.subplot2grid((3,3), (2, 2))
+    ax1 = plt.subplot2grid((3,3), (0, 0), colspan=2, rowspan=3)
+    ax2 = plt.subplot2grid((3,3), (0, 2))
+    ax3 = plt.subplot2grid((3,3), (1, 2))
+    ax4 = plt.subplot2grid((3,3), (2, 2))
 
-    if showGraph:
-        ax2 = fig.add_subplot(212)
-        ax2.grid()
-        ax2.set_ylabel("Lateral Divergence (px/frame)"); ax2.set_xlabel("Frame Number")
-        graphdisp, = ax2.plot([],[],'m-o')
+    for ax in fig.axes: ax.set_xticks([])
+    ax1.set_yticks([])
+    ax2.grid(); ax3.grid(); ax4.grid()
+    ax2.set_title("Lateral Divergence (px/frame)")
+    ax3.set_title("Vertical Divergence (px/frame)")
+    ax4.set_title("TTC (px/frame)")
+    # ax4.set_xlabel("Frame Number")
+
+    imdisp = ax1.imshow(img,plt.cm.gray)
+    b_latdiv, = ax2.bar(0.1, 0, 0.8, color='m')
+    b_verdiv, = ax3.bar(0.1, 0, 0.8, color='orange')
+    b_ttc, = ax4.bar(0.1, 0, 0.8, color='g')
+    txt = fig.text(0.1, 0.1, "")
+
+    for ax in (ax2,ax3,ax4):
+        ax.set_xlim(0,1); ax.set_ylim(-5,5)
 
     fig.tight_layout()
 
-    if showGraph:
-        return fig, imdisp, graphdisp
-
     # cid = fig.canvas.mpl_connect('key_press_event', onkey)
 
-    return fig, imdisp
+    # return fig, imdisp, l_latdiv, l_verdiv, l_ttc
+    return fig, imdisp, txt, b_latdiv, b_verdiv, b_ttc
 
 
 def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=30, scale=4):
@@ -91,9 +115,10 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=30, scale=
     startX, stopX = Xspan
     Y, X = np.mgrid[startY:stopY:skiplines, startX:stopX:skiplines]
     q = axis.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
-                    , scale=1/float(scale), units='x', alpha=0.6
-                    , edgecolor='k'
-                    , linewidth=0.5, facecolor='k')
+                    , np.dstack((X,Y)), scale=1/float(scale), units='x', alpha=0.6
+                    , edgecolor='k', pivot='tail', width=1.5
+                    , linewidth=0, facecolor='k'
+                    , headwidth=3, headlength=5, headaxislength=5)
     return X, Y, q
 
 
@@ -114,7 +139,8 @@ def animate(i):
     global flowVals, frameIdx
     global ax1, ax2
 
-    update = [graphdisp, imdisp]
+    # update = [l_latdiv, l_verdiv, l_ttc, imdisp]
+    update = [imdisp]    
 
     clrframe = framegrabber.next()
     framenum = i + flowStartFrame
@@ -132,31 +158,48 @@ def animate(i):
     params['flow'] = np.copy(flow)  # save current flow values for next call
 
     flowthresh, mag = threshold_flow(flow)
-    yDiv = computeDivergence(flow, topMask, bottomMask, template='vertical')
-    flowVals[i] = computeDivergence(flow, rightMask, leftMask)
+    flowVals[i,0] = computeDivergence(flow, rightMask, leftMask)
+    flowVals[i,1] = computeDivergence(flow, topMask, bottomMask)
+    flowVals[i,2] = 1/(flowVals[i,0]+flowVals[i,1])
 
     # update figure
     if opts.vis == "color":
         cf.colorFlow(flow, clrframe
-                     , slice(startY,stopY)
                      , slice(startX,stopX)
+                     , slice(startY,stopY)
                      , mag > flowthresh)
         imdisp.set_data(clrframe[::opts.decimate, ::opts.decimate, :])
     elif opts.vis == "quiver":
-        update.append(q)
+        update.append(q) # add this object to those that are to be updated
+
         q.set_UVC(flow[::skiplines,::skiplines,0][::opts.decimate]
-                  ,flow[::skiplines,::skiplines,1][::opts.decimate])
-        cv2.rectangle(clrframe, *leftRect, color=(32,128,0), thickness=1.5)
-        cv2.rectangle(clrframe, *rightRect, color=(32,128,0), thickness=2)
+                  ,flow[::skiplines,::skiplines,1][::opts.decimate]
+                  ,mag[::skiplines,::skiplines])
+        # cv2.rectangle(clrframe, *leftRect, color=(32,128,0), thickness=1)
+        # cv2.rectangle(clrframe, *rightRect, color=(32,128,0), thickness=1)
+        # cv2.rectangle(clrframe, *topRect, color=(128,32,0), thickness=1.5)
+        # cv2.rectangle(clrframe, *botRect, color=(128,32,0), thickness=1.5)
+        
         imdisp.set_data(clrframe[::opts.decimate, ::opts.decimate, :])
-    if opts.plot:
-        graphdisp.set_data(frameIdx[:i+1]
-                           , flowVals[:i+1])
-        if (i % 5) == 0:
-            if i>10: ax2.set_xlim(framenum-8,framenum+8)
-            ax2.relim()
-            ax2.autoscale_view() # autoscale axes
-            fig.canvas.draw()
+    # l_latdiv.set_data(frameIdx[:i+1]
+    #                   , flowVals[:i+1,0])
+    # l_verdiv.set_data(frameIdx[:i+1]
+    #                   , flowVals[:i+1,1])
+    # l_ttc.set_data(frameIdx[:i+1]
+    #                   , flowVals[:i+1,2])
+    b_latdiv.set_height(flowVals[i,0])
+    b_verdiv.set_height(flowVals[i,1])
+    b_ttc.set_height(flowVals[i,2])
+    # txt.set_text("Frame %d of %d" % (framenum, endFrame))
+    
+
+    update.extend([b_latdiv, b_verdiv, b_ttc])
+    # if (i % 5) == 0:
+    #     for ax in (ax2,ax3,ax4):
+    #         ax.set_xlim(framenum-8,framenum+8)
+    #         ax.relim()
+    #         ax.autoscale_view() # autoscale axes
+    # fig.canvas.draw()
 
     frames[:-1] = frames[1:]  # drop the oldest frame
     frames[-1] = currFrame   # and add this one
@@ -169,7 +212,7 @@ def computeDivergence(flow, mask1, mask2, template='lateral'):
     flow2 = np.mean(flow[mask2, :], 0)
 
     d = 0 if template == 'lateral' else 1
-    return flow1[d] - flow2[d]
+    return flow1[d] + flow2[d]
 
 
 # if __name__ == "__main__":
@@ -244,50 +287,56 @@ else:
 opts.p0 = map(float,opts.p0.split(','))
 opts.p1 = map(float,opts.p1.split(','))
 #------------------------------------------------------------------------------#
-
 # set up a frame averager
+
 frames = []
 for i in range(opts.frameavg):
     frames.append(cv2.cvtColor(framegrabber.next(), cv2.COLOR_BGR2GRAY))
 flowDataLen = endFrame - startFrame - 1 - (opts.frameavg-1)
 flowStartFrame = startFrame + 1 + (opts.frameavg-1)
 #------------------------------------------------------------------------------#
-
 # set up parameters for easy indexing into image
+
 imgH, imgW = frames[0].shape
 startX, startY = map(int, (opts.p0[0]*imgW, opts.p0[1]*imgH))
 stopX, stopY = map(int,(opts.p1[0]*imgW, opts.p1[1]*imgH))
 maskH, maskW = stopY-startY, stopX-startX
 print "Using window:", ((startX,startY),(stopX,stopY))
 #------------------------------------------------------------------------------#
-
 # Set up region of interest and divergence templates
+
 roi = np.zeros((imgH, imgW), dtype=np.bool)
 roi[startY:stopY, startX:stopX] = True
 flowMask, topMask, bottomMask, leftMask, rightMask = generateTemplates(maskH,maskW)
 leftRect = (startX, startY), (int(0.45*maskW), stopY)
 rightRect = (int(0.55*maskW), startY), (maskW, stopY)
-#------------------------------------------------------------------------------#    
+# topRect = (int(0.3*maskH), startX), (int(0.45*maskW), stopY)
+# botRect = (int(0.55*maskW), startY), (maskW, stopY)
 
+#------------------------------------------------------------------------------#    
 # Set up parameters for OF calculation
+
 flow = np.zeros((maskH, maskW, 2))
-flowVals = np.zeros(flowDataLen)
+flowVals = np.zeros((flowDataLen,3))
 params = {'pyr_scale': 0.5, 'levels': 2, 'winsize': 15, 'iterations': 30
           ,'poly_n': 5, 'poly_sigma': 1.1  #, 'flags': 0}
           ,'flags': cv2.OPTFLOW_USE_INITIAL_FLOW, 'flow': flow}
 frameIdx = np.arange(flowDataLen) + flowStartFrame
 #------------------------------------------------------------------------------#
-
 # Set up figure for interactive plotting
-fig, imdisp, graphdisp = setup_plot(framegrabber.next(), showGraph=opts.plot)
-ax1, ax2 = fig.axes
+
+# fig, imdisp, l_latdiv, l_verdiv, l_ttc = setup_plot(framegrabber.next())
+# ax1, ax2, ax3, ax4 = fig.axes
+fig, imdisp, txt, b_latdiv, b_verdiv, b_ttc = setup_plot(framegrabber.next())
+ax1, ax2, ax3, ax4 = fig.axes
+
 
 if opts.vis == 'quiver':
     skiplines = 30
     X, Y, q = setup_quiver(ax1
                            , Xspan=(startX, stopX)
                            , Yspan=(startY, stopY)
-                           , scale=opts.decimate
+                           , scale=opts.decimate*2
                            , skiplines=skiplines)
 
 anim = animation.FuncAnimation(fig, animate , init_func=init
@@ -299,66 +348,8 @@ if cap is not None: cap.release()
 plt.close()
 plt.ioff()
 
-# for i, clrframe in enumerate(framegrabber):
-    # framenum = i + flowStartFrame
-    # if not opts.quiet:
-    #     sys.stdout.write("\rProcessing frame %d..." % i)
-    #     sys.stdout.flush()
-
-    # # compute flow
-    # currFrame = cv2.cvtColor(clrframe, cv2.COLOR_BGR2GRAY)
-    # prvs = sum(frames) / float(opts.frameavg)
-    # nxt = (sum(frames[1:]) + currFrame) / float(opts.frameavg)
-    # flow = cv2.calcOpticalFlowFarneback(prvs[roi].reshape(flowMask.shape)
-    #                                     , nxt[roi].reshape(flowMask.shape)
-    #                                     , **params)
-    # params['flow'] = np.copy(flow)  # save current flow values for next call
-
-    # flowthresh, mag = threshold_flow(flow)
-    # xDiv = computeDivergence(flow, rightMask, leftMask)
-    # yDiv = computeDivergence(flow, topMask, bottomMask, template='vertical')
-    # flowVals[i] = xDiv
-
-    # if opts.show:
-        # represent flow angle and magnitude by color values
-        # update_figure(imdisp, clrframe, troi, graphdisp)
-        # if opts.vis == "color":
-        #     colorFlow(flow, clrframe)
-        #     imdisp.set_data(clrframe[::opts.decimate, ::opts.decimate, :])
-        # elif opts.vis == "quiver":
-        #     q.set_UVC(flow[::skiplines,::skiplines,0][::opts.decimate]
-        #               ,flow[::skiplines,::skiplines,1][::opts.decimate])
-        #     cv2.rectangle(clrframe, *leftRect, color=(0,128,0), thickness=2)
-        #     cv2.rectangle(clrframe, *rightRect, color=(0,128,0), thickness=2)
-        #     imdisp.set_data(clrframe[::opts.decimate, ::opts.decimate, ::-1])
-        # if opts.plot:
-        #     graphdisp.set_data(frameIdx[:i+1]
-        #                        , flowVals[:i+1])
-        #     if (i % 5) == 0:
-        #         if i>10: ax2.set_xlim(framenum-8,framenum+8)
-        #         ax2.relim()
-        #         ax2.autoscale_view() # autoscale axes
-        # fig.canvas.draw()
-
-    # frames[:-1] = frames[1:]  # drop the oldest frame
-    # frames[-1] = currFrame   # and add this one
-
 # if opts.show:
     # raw_input("Exit?")
-
-# if cap is not None: cap.release()
-# plt.close()
-# plt.ioff()
-
-
-# frameIdx, maxFlowVals = main(cap, startFrame, endFrame
-#                              , verbose=not opts.quiet
-#                              , vis=opts.vis
-#                              , mask=(opts.p0,opts.p1)
-#                              , show=opts.show
-#                              , decimate=opts.decimate
-#                              , plot=opts.plot
-#                              , frameAverage=opts.frameavg)
 
 
 # One of the most decent ones so far
@@ -372,14 +363,6 @@ plt.ioff()
 # Bad illumination variation in this one...
 # cap = cv2.VideoCapture("../2014-04-03-201007.avi")
 # startFrame,endFrame = 230,390
-
-
-# frame1 = cv2.imread("../beyond_pixels_matlab-code_celiu/car1.jpg")
-# startFrame, endFrame = (0, 2)
-
-
-
-# cv2.destroyAllWindows()
 
 
 # Create an image of coordinates
@@ -404,8 +387,6 @@ plt.ioff()
 
 #     cv2.line(nxt,(x0,y0),(x1,y1),(255,0,0),5)
 
-
-
 # prvs=prvs[roi].reshape((imgH - 2*offsetY, imgW - 2*offsetX))
 
 # # allocate matrix for visualizing flow as hue and value image
@@ -419,8 +400,8 @@ plt.ioff()
 # txt.set_text("Frame %5d" % i
 #              + "Flow Magnitude Range: (%f, %f)" % (flowmin, flowmax))
 
-    # txt = ax1.annotate("Frame %5d" % startFrame,(0.3,0.9)
-    #                   ,xycoords="figure fraction")
+# txt = ax1.annotate("Frame %5d" % startFrame,(0.3,0.9)
+#                   ,xycoords="figure fraction")
 
 
 # cv2.calcOpticalFlowSF(prvs[roi].reshape(winSize)
@@ -429,8 +410,3 @@ plt.ioff()
 # flow = calcOpticalFlowHS(prvs[roi].reshape(winSize)
 #                          , nxt[roi].reshape(winSize)
 #                          , *winSize)
-
-
-
-
-    
