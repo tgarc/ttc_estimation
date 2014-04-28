@@ -21,7 +21,11 @@ def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False):
     else:
         paddedFrame = np.pad(frame, bSize, mode=mode)
         reshapeSz = list(frame.shape)+[-1]
-    out = func(view_as_windows(paddedFrame,shape).reshape(reshapeSz),axis=2)
+
+    if out is None:
+        out = func(view_as_windows(paddedFrame,shape).reshape(reshapeSz),axis=2)
+    else:
+        out[:] = func(view_as_windows(paddedFrame,shape).reshape(reshapeSz),axis=2)
 
     return out
 
@@ -44,70 +48,58 @@ def RLS(x,cov,yhat,lam=1):
     return y
 
 
-def calcOpticalFlowHS(prvs, nxt, imgH, imgW, smooth=100.):
+def calcOpticalFlowHS(prvs, nxt, lam=100.):
+    imgH, imgW = prvs.shape
     u = cv.CreateMat(imgH, imgW, cv.CV_32FC1)
     v = cv.CreateMat(imgH, imgW, cv.CV_32FC1)
-    uCV = cv.CreateMat(imgH, imgW, cv.CV_8UC1)
-    src = cv.fromarray(prvs)
-    cv.Convert(src, uCV)
-    vCV = cv.CreateMat(imgH, imgW, cv.CV_8UC1)
-    src = cv.fromarray(nxt)
-    cv.Convert(src, vCV)
 
-    cv.CalcOpticalFlowHS(uCV, vCV
+    prv_cv = cv.CreateMat(imgH, imgW, cv.CV_8UC1)
+    src = cv.fromarray(prvs)
+    cv.Convert(src, prv_cv)
+
+    nxt_cv = cv.CreateMat(imgH, imgW, cv.CV_8UC1)
+    src = cv.fromarray(nxt)
+    cv.Convert(src, nxt_cv)
+
+    term_cond = (cv.CV_TERMCRIT_ITER | cv.CV_TERMCRIT_EPS, 75,0.001)
+    cv.CalcOpticalFlowHS(prv_cv, nxt_cv
                          , False
                          , u
                          , v
-                         , smooth
-                         , (cv.CV_TERMCRIT_ITER | cv.CV_TERMCRIT_EPS, 75,0.001))
+                         , lam
+                         , term_cond)
     return np.dstack((u,v))
 
 
-def tmean(vec, llim=0.01, ulim=0.99):
-    vmax, vmin = np.nanmax(vec), np.nanmin(vec)
-    vrange = (vmax-vmin)
-    v_llim, v_ulim = llim*vrange, ulim*vrange
-    return np.mean(vec[vec > v_llim & vec < v_ulim])
+# threshold an array of vectors
+def trim(vec, axis, llim=0.05, ulim=0.95, fill=0):
+    vrange = np.nanmax(vec,axis=axis) - np.nanmin(vec,axis=axis)
+    thresh_high = np.atleast_2d(ulim*vrange).T
+    thresh_low = np.atleast_2d(llim*vrange).T
+    vec[(vec < thresh_low) | (vec > thresh_high)] = fill
 
 
-def tmean2d(mat, shape, llim=0.01, ulim=0.99):
-    blocks = view_as_blocks(mat, shape)
-
-    wmax = np.apply_over_axes(np.max, blocks, (2,3))
-    wmin = np.apply_over_axes(np.min, blocks, (2,3))
-
-    l = lambda x, ax: tmean(x, llim=llim, ulim=ulim)
-
-    return 
-
-
-def threshold_flow(flow, mag, llim=0.01, ulim=0.99):
-    # blocks = view_as_blocks(mag, (8,8))
+def threshold_flow(flow, mag, shape, llim=0.01, ulim=0.99):
+    trim(view_as_blocks(mag, shape).reshape((-1,np.prod(shape)))
+         , axis=1)
     
-    flowmax, flowmin = np.nanmax(mag), np.nanmin(mag)
-    flowthresh_high = ulim*(flowmax-flowmin)
-    flowthresh_low = llim*(flowmax-flowmin)
-    flow[mag > flowthresh_high, :] = 0
-    flow[mag < flowthresh_low,:] = 0
+    # flowmax, flowmin = np.nanmax(mag), np.nanmin(mag)
+    # flowthresh_high = ulim*(flowmax-flowmin)
+    # flowthresh_low = llim*(flowmax-flowmin)
+    # flow[mag < flowthresh_low | mag > flowthresh_high, :] = 0
+    flow[mag == 0] = 0
 
-    return flowthresh_low, flowthresh_high
+    return mag != 0
+    # return flowthresh_low, flowthresh_high
 
 
 def init():
     imdisp.set_data(np.zeros_like(frames[0]))
-    # l_latdiv, = ax2.plot([],[],'-o', color='m')
-    # l_verdiv, = ax3.plot([],[],'-o', color='orange')
-    # l_ttc, = ax4.plot([],[],'-o', color='g')
     b_latdiv.set_height(0)
     b_verdiv.set_height(0)
     b_ttc.set_height(0)
-    # txt.set_text("Frame %d of %d" % (flowStartFrame, endFrame))
-    
-    # update = [imdisp,l_latdiv,l_verdiv,l_ttc]
+
     update = [imdisp, b_ttc, b_verdiv, b_ttc]  
-
-    # for ax in (ax2,ax3,ax4): ax.set_xlim(0,16)
-
     if opts.vis == "quiver":
         q.set_UVC([],[])
         update.append(q)
@@ -117,10 +109,6 @@ def init():
 
 def setup_plot(img):
     fig = plt.figure()
-    # ax1 = plt.subplot2grid((3,3), (0, 0), colspan=3, rowspan=2)
-    # ax2 = plt.subplot2grid((3,3), (2, 0))
-    # ax3 = plt.subplot2grid((3,3), (2, 1))
-    # ax4 = plt.subplot2grid((3,3), (2, 2))
     ax1 = plt.subplot2grid((3,3), (0, 0), colspan=2, rowspan=3)
     ax2 = plt.subplot2grid((3,3), (0, 2))
     ax3 = plt.subplot2grid((3,3), (1, 2))
@@ -132,7 +120,6 @@ def setup_plot(img):
     ax2.set_title("Lateral Divergence (px/frame)")
     ax3.set_title("Vertical Divergence (px/frame)")
     ax4.set_title("TTC (px/frame)")
-    # ax4.set_xlabel("Frame Number")
 
     imdisp = ax1.imshow(img,plt.cm.gray)
     b_latdiv, = ax2.bar(0.1, 0, 0.8, color='m')
@@ -142,16 +129,12 @@ def setup_plot(img):
 
     for ax in (ax2,ax3,ax4):
         ax.set_xlim(0,1); ax.set_ylim(-5,5)
-
     fig.tight_layout()
 
-    # cid = fig.canvas.mpl_connect('key_press_event', onkey)
-
-    # return fig, imdisp, l_latdiv, l_verdiv, l_ttc
     return fig, imdisp, txt, b_latdiv, b_verdiv, b_ttc
 
 
-def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=30, scale=4):
+def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=30, scale=1):
     startY, stopY = Yspan
     startX, stopX = Xspan
     Y, X = np.mgrid[startY+skiplines//2:stopY+1-skiplines//2:skiplines
@@ -159,9 +142,9 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=30, scale=
     q = axis.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
                     , np.dstack((X,Y)), scale=1/float(scale), units='x', alpha=0.6
                     , edgecolor='k', pivot='tail', width=1.5
-                    , linewidth=0, facecolor='k'
-                    , headwidth=3, headlength=5, headaxislength=5
-                    , cmap=plt.cm.gist_heat)
+                    , linewidth=0.1, headwidth=3
+                    , headlength=5, headaxislength=5
+                    , cmap=plt.cm.cool)
     return X, Y, q
 
 
@@ -194,17 +177,18 @@ def animate(i):
     currFrame = cv2.cvtColor(clrframe, cv2.COLOR_BGR2GRAY)
     prvs = sum(frames) / float(opts.frameavg)
     nxt = (sum(frames[1:]) + currFrame) / float(opts.frameavg)
-    flow = cv2.calcOpticalFlowFarneback(prvs[startY:stopY,startX:stopX]
-                                        , nxt[startY:stopY,startX:stopX]
-                                        , **params)
+    flow = -cv2.calcOpticalFlowFarneback(prvs[startY:stopY,startX:stopX]
+                                         , nxt[startY:stopY,startX:stopX]
+                                         , **params)
     # flow = liu_flow(prvs[startY:stopY,startX:stopX]
     #                 , nxt[startY:stopY,startX:stopX])
+    # flow = calcOpticalFlowHS(prvs[startY:stopY,startX:stopX]
+    #                          , nxt[startY:stopY,startX:stopX]
+    #                          , lam=10)
 
     # clean up flow estimates, remove outliers
     mag, angle = cv2.cartToPolar(flow[...,0], flow[...,1])
-    flowthresh_l, flowthresh_h = threshold_flow(flow, mag, llim=0.1, ulim=0.9)
-    threshmask = (mag > flowthresh_l) & (mag < flowthresh_h)
-    mag[~threshmask] = 0
+    threshmask = threshold_flow(flow, mag, shape=(8,8), llim=0.01, ulim=0.95)
     params['flow'] = np.copy(flow)  # save current flow values for next call
     
     # estimate the location of the FoE
@@ -213,15 +197,18 @@ def animate(i):
     generic2dFilter(padded, foeKsz, matchWin, out=S, mode='constant', padded=True)
     foe = np.argmin(S)
     foe_y, foe_x = foe/maskW, foe%maskW
-    cv2.rectangle(clrframe, (foe_x-7,foe_y-7), (foe_x+7,foe_y+7),color=(0,0,0))
+    cv2.rectangle(clrframe, (foe_x-opts.decimate*foeKsz[1]//2
+                             , foe_y-opts.decimate*foeKsz[0]//2)
+                  , (foe_x+opts.decimate*foeKsz[1]//2
+                     , foe_y+opts.decimate*foeKsz[0]//2)
+                  ,color=(0,0,0))
 
     # estimate divergence parameters and ttc
     xDiv = np.mean(mag[leftMask]) - np.mean(mag[rightMask])
     yDiv = np.mean(mag[topMask]) - np.mean(mag[bottomMask])
     ttc = 2/(xDiv + yDiv)
 
-    history[:-1] = history[1:]
-    history[-1] = ttc
+    history[:-1] = history[1:]; history[-1] = ttc
     flowVals[i,:-1] = (xDiv,yDiv)
     # w_forget = map(lambda x: np.power(*x), zip([0.5]*5,np.arange(1,6)))
     # m, y0, _, _, std = stats.linregress(np.arange(len(history)), history)
@@ -238,22 +225,19 @@ def animate(i):
         imdisp.set_data(cf.flowToColor(flow))
     elif opts.vis == "quiver":
         update.append(q) # add this object to those that are to be updated
-        q.set_UVC(flow[::skiplines,::skiplines,0]
-                  , flow[::skiplines,::skiplines,1]
-                  , mag[::skiplines,::skiplines]/np.nanmax(mag)*255)
-        # cv2.rectangle(clrframe, *leftRect, color=(32,128,0), thickness=1)
-        # cv2.rectangle(clrframe, *rightRect, color=(32,128,0), thickness=1)
-        # cv2.rectangle(clrframe, *topRect, color=(128,32,0), thickness=1)
-        # cv2.rectangle(clrframe, *botRect, color=(128,32,0), thickness=1)
-        
+        q.set_UVC(flow[skiplines//2:-skiplines//2+1:skiplines
+                       , skiplines//2:-skiplines//2+1:skiplines, 0]
+                  , flow[skiplines//2:-skiplines//2+1:skiplines
+                         , skiplines//2:-skiplines//2+1:skiplines, 1]
+                  , mag[skiplines//2:-skiplines//2+1:skiplines
+                         , skiplines//2:-skiplines//2+1:skiplines]*255/(np.max(mag)-np.min(mag)))
         imdisp.set_data(clrframe[..., ::-1])
     b_latdiv.set_height(flowVals[i,0])
     b_verdiv.set_height(flowVals[i,1])
     b_ttc.set_height(flowVals[i,2])
 
-    update.extend([b_latdiv, b_verdiv, b_ttc])
-
     frames[:-1] = frames[1:]; frames[-1] = currFrame
+    update.extend([b_latdiv, b_verdiv, b_ttc])
 
     return update
 
@@ -387,8 +371,8 @@ matchWin = lambda vec, axis: np.sum(foeKern - vec,axis=axis)
 
 flow = np.zeros((maskH, maskW, 2), np.float32)
 flowVals = np.zeros((flowDataLen+1,3), np.float32)
-params = {'pyr_scale': 0.5, 'levels': 3, 'winsize': 20//opts.decimate
-          , 'iterations': 10, 'poly_n': 5, 'poly_sigma': 1.1
+params = {'pyr_scale': 0.5, 'levels': 3, 'winsize': 20
+          , 'iterations': 12, 'poly_n': 5, 'poly_sigma': 1.1
           , 'flags': cv2.OPTFLOW_USE_INITIAL_FLOW #| cv2.OPTFLOW_FARNEBACK_GAUSSIAN
           , 'flow': flow}
 frameIdx = np.arange(flowDataLen) + flowStartFrame
@@ -401,7 +385,7 @@ fig, imdisp, txt, b_latdiv, b_verdiv, b_ttc = setup_plot(np.zeros_like(frames[0]
 ax1, ax2, ax3, ax4 = fig.axes
 
 if opts.vis == 'quiver':
-    skiplines = 20
+    skiplines = 15
     X, Y, q = setup_quiver(ax1
                            , Xspan=(startX, stopX)
                            , Yspan=(startY, stopY)
