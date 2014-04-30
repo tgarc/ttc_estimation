@@ -182,14 +182,20 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=20, scale=
     return X, Y, q
 
 
-def generateTemplates(maskH, maskW):
-    flowMask = np.ones((maskH,maskW), dtype=np.bool)
-    topMask = np.copy(flowMask); topMask[0.45*maskH:, :] = False
-    bottomMask = np.copy(flowMask); bottomMask[:0.55*maskH, :] = False
-    leftMask = np.copy(flowMask); leftMask[:, 0.45*maskW:] = False
-    rightMask = np.copy(flowMask); rightMask[:, :0.55*maskW] = False
+def generate2dTemplates(maskShape, toplim=(0,0.5), botlim=(0.5,1)
+                        , leftlim=(0,0.5), rightlim=(0.5,1)):
+    llim, rlim = map(lambda x,y: slice(x*imgW, y*imgW), leftlim, rightlim)
+    blim, tlim = map(lambda x,y: slice(x*imgH, y*imgH), botlim, toplim)
+    topMask = np.ones(maskShape, dtype=np.bool)
+    topMask[tlim, :] = False
+    bottomMask = np.ones(maskShape, dtype=np.bool)
+    bottomMask[blim, :] = False
+    leftMask = np.ones(maskShape, dtype=np.bool)
+    leftMask[:, llim] = False
+    rightMask = np.ones(maskShape, dtype=np.bool)
+    rightMask[:, rlim] = False
     
-    return flowMask, topMask, bottomMask, leftMask, rightMask
+    return topMask, bottomMask, leftMask, rightMask
 
 
 def fill_padded_edges(frame,paddedFrame,shape):
@@ -221,7 +227,9 @@ def animate(i):
     framenum = i + flowStartFrame
     times[i] = framenum
 
-    # compute flow
+    # ------------------------------------------------------------
+    # Compute optical flow
+    # ------------------------------------------------------------    
     clrframe = framegrabber.next()
     currFrame = cv2.cvtColor(clrframe, cv2.COLOR_BGR2GRAY)
     prvs = sum(frames) / float(opts.frameavg)
@@ -236,7 +244,10 @@ def animate(i):
     #                          , lam=10)
     params['flow'] = flow.copy()
     mag, angle = cv2.cartToPolar(flow[...,0], flow[...,1])
-    
+
+    # ------------------------------------------------------------
+    # Remove outlier flow
+    # ------------------------------------------------------------    
     if opts.nofilt:
         threshmask = flowMask
     else:
@@ -249,7 +260,9 @@ def animate(i):
         mag[~threshmask] = 0
     params['flow'] = np.copy(flow)  # save current flow values for next call
 
+    # ------------------------------------------------------------
     # estimate the location of the FoE
+    # ------------------------------------------------------------    
     dt=4
     fill_padded_edges(angle, padded, foeKsz)
     S = generic2dFilter(padded, foeKsz, matchWin, padded=True, step=dt)
@@ -260,6 +273,11 @@ def animate(i):
     confidence = participants[foe_y, foe_x] / np.prod(foeKsz)
     foe_y, foe_x = startY + foe_y*dt , startX + foe_x*dt
 
+    foeMask = np.zeros_like(flowMask)
+    foeMask[foe_y-foeKsz[0]//2:foe_y+foeKsz[0]//2
+            , foe_x-foeKsz[1]//2:foe_x+foeKsz[1]//2] = True
+    foe_tmask, foe_bmask, foe_lmask, foe_rmask = generate2dTemplates(flowMask.shape)
+
     cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
                   , (foe_x+foeKsz[1]//2, foe_y+foeKsz[0]//2)
                   , color=(0,255,0))
@@ -267,16 +285,23 @@ def animate(i):
                   , (foe_x, foe_y+foeKsz[0]//2)
                   , color=(255,0,0))
 
-    # estimate divergence parameters and ttc
-    xDiv = (np.sum(flow[leftMask,0]) - np.sum(flow[rightMask,0]))/np.sum(leftMask|rightMask)
-    yDiv = (np.sum(flow[topMask,1]) - np.sum(flow[bottomMask,1]))/np.sum(topMask|bottomMask)
-    xDiv_ttc = (np.sum(flow[foe_y-foeKsz[0]//2:foe_y+foeKsz[0]//2, foe_x-foeKsz[1]//2:foe_x, 0])
-                - np.sum(flow[foe_y-foeKsz[0]//2:foe_y+foeKsz[0]//2, foe_x:foe_x+foeKsz[1]//2, 0]))
-    yDiv_ttc = (np.sum(flow[foe_y-foeKsz[0]//2:foe_y, foe_x-foeKsz[1]//2:foe_x+foeKsz[1]//2, 1])
-                - np.sum(flow[foe_y:foe_y+foeKsz[0]//2, foe_x-foeKsz[1]//2:foe_x+foeKsz[1]//2, 1]))               
+    # ------------------------------------------------------------
+    # estimate divergence parameters and ttc for this frame
+    # ------------------------------------------------------------
+    xDiv = (np.sum(flow[leftMask,0]) - np.sum(flow[rightMask,0])) \
+           /np.sum((leftMask|rightMask) & threshmask)
+    yDiv = (np.sum(flow[topMask,1]) - np.sum(flow[bottomMask,1])) \
+           /np.sum((topMask|bottomMask) & threshmask)
+    xDiv_ttc = (np.sum(flow[foe_lmask,0]) - np.sum(flow[foe_rmask,0])) \
+               /np.sum((foe_lmask|foe_rmask) & threshmask)
+    yDiv_ttc = (np.sum(flow[foe_tmask, 1]) - np.sum(flow[foe_bmask, 1])) \
+               /np.sum((foe_tmask|foe_bmask) & threshmask)
     ttc = 2/(xDiv_ttc + yDiv_ttc)
-    history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
 
+    # ------------------------------------------------------------    
+    # use estimation history to estimate new values
+    # ------------------------------------------------------------
+    history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
     if i > history.shape[1]:
         flowVals[:2, i] = np.sum(history[:2, :]*w_forget/sum(w_forget), axis= 1)
         m, y0, _, _, std = stats.linregress(times[i-history.shape[1]+1:i+1], history[-1, :]*w_forget/sum(w_forget))
@@ -284,15 +309,19 @@ def animate(i):
     else:
         flowVals[2, i] = ttc
 
+    # ------------------------------------------------------------            
     # write out results
+    # ------------------------------------------------------------        
     if opts.log:
         print >> logfile, ','.join(map(str,(framenum, xDiv,yDiv,ttc,100.*confidence)))
     if not opts.quiet:
         out = (framenum, xDiv,yDiv,ttc,100.*confidence)
-        sys.stdout.write("\r%04d %+06.2f %+06.2f %+06.2f %+06.2f" % out)
+        sys.stdout.write("\r%4d %+6.2f %+6.2f %+6.2f %+6.2f" % out)
         sys.stdout.flush()
 
+    # ------------------------------------------------------------
     # update figure
+    # ------------------------------------------------------------    
     b_latdiv.set_height(flowVals[0,i] if abs(flowVals[0,i]) > 0.01 else 0)
     b_verdiv.set_height(flowVals[1,i] if abs(flowVals[1,i]) > 0.01 else 0)
     b_ttc.set_height(flowVals[2,i] if np.sum(mag[threshmask])/mag.size > 0.01 else 0)
@@ -314,9 +343,10 @@ def animate(i):
                          , skiplines//2:-skiplines//2+1:skiplines]*255/(np.max(mag)-np.min(mag)))
         imdisp.set_data(clrframe[..., ::-1])
 
+    # shift into the frame buffer
     frames[:-1] = frames[1:]; frames[-1] = currFrame
-    update.extend([b_latdiv, b_verdiv, b_ttc])
 
+    update.extend([b_latdiv, b_verdiv, b_ttc])
     return update
 
 
@@ -436,7 +466,8 @@ print "Processing %d frames." % (endFrame-startFrame)
 
 roi = np.zeros((imgH, imgW), dtype=np.bool)
 roi[startY:stopY, startX:stopX] = True
-flowMask, topMask, bottomMask, leftMask, rightMask = generateTemplates(maskH,maskW)
+flowMask = np.ones((maskH,maskW), dtype=np.bool)
+topMask, bottomMask, leftMask, rightMask = generate2dTemplates(flowMask.shape)
 leftRect = (startX, startY), (startX+int(0.5*maskW), stopY)
 rightRect = (startX+int(0.5*maskW), startY), (stopX, stopY)
 topRect = (startX, startY), (stopX, startY+int(0.5*maskH))
