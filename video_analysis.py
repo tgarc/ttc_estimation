@@ -21,26 +21,37 @@
 # cv2.calcOpticalFlowSF(prvs[roi].reshape(winSize)
 #                       , nxt[roi].reshape(winSize)
 #                       , params['flow'], 3, 2, 4)
-# flow = calcOpticalFlowHS(prvs[roi].reshape(winSize)
-#                          , nxt[roi].reshape(winSize)
-#                          , *winSize)
 #------------------------------------------------------------------------------#
 import cv2,cv
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import color_flow as cf
-import sys
+import sys, time
+import scipy.stats as stats
 from skimage.util import view_as_windows, view_as_blocks
-from scipy import stats
-from xbob.optflow.liu import cg_flow as liu_flow
 
 
-# def pad(frame, shape, step=1):
-#     paddedFrame = np.pad(frame, bSize, mode=mode)
-
-# only works with odd kernels currently! (and even steps?)
 def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False, step=1):
+    '''
+    generic2dFilter
+
+    Apply a generic function to blocks of a 2d array. Function must accept
+    arguments in the form (array, axis, out) where array is a 3d array of
+    flattened blocks from the original image, axis is the axis that sequences
+    the blocks and out is an optional user input array to be assigned to.
+
+    Parameters
+    ----------
+    mode : string
+    Decides how to pad the array. See numpy's pad function for a
+    description.
+
+    frame : 2 dimensional array
+        2 dimensional array
+    step : integer
+        Describes the stride used when iterating over the array.
+    '''
     bSize= shape[0]//2, shape[1]//2
 
     if padded:
@@ -56,79 +67,50 @@ def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False, 
                ,axis=2, out=out)
 
 
-def RLS(x,cov,yhat,lam=1):
-    '''
-    function [th,p] = rolsf(x,y,p,th,lam)
-    Recursive ordinary least squares for single output case,
-    including the forgetting factor, lambda.
-    Enter with x = input, y = output, p = covariance, th = estimate, 
-    lam = forgetting factor
-    '''
-    a=p*x
-    g=1/(x.dot(a)+lam)
-    k=g*a;
-    e=y-x.dot(th)
-    th=th+k*e;
-    cov = (cov-g*a*a.T)/lam
-
-    return y
-
-
-def calcOpticalFlowHS(prvs, nxt, lam=100.):
-    imgH, imgW = prvs.shape
-    u = cv.CreateMat(imgH, imgW, cv.CV_32FC1)
-    v = cv.CreateMat(imgH, imgW, cv.CV_32FC1)
-
-    prv_cv = cv.CreateMat(imgH, imgW, cv.CV_8UC1)
-    src = cv.fromarray(prvs)
-    cv.Convert(src, prv_cv)
-
-    nxt_cv = cv.CreateMat(imgH, imgW, cv.CV_8UC1)
-    src = cv.fromarray(nxt)
-    cv.Convert(src, nxt_cv)
-
-    term_cond = (cv.CV_TERMCRIT_ITER | cv.CV_TERMCRIT_EPS, 75,0.001)
-    cv.CalcOpticalFlowHS(prv_cv, nxt_cv
-                         , False
-                         , u
-                         , v
-                         , lam
-                         , term_cond)
-    return np.dstack((u,v))
-
-
-# threshold an array of vectors
 def trim(vec, axis, llim=0.05, ulim=0.95, fill=0):
+    '''
+    trim
+
+    Threshold a 2d array of vectors using a percentile.
+    '''
     vrange = np.sort(vec,axis=axis)
     thresh_low = vrange[ ..., [round(llim*vrange.shape[axis])] ]
     thresh_high = vrange[ ..., [round(ulim*vrange.shape[axis])] ]
     vec[..., (vec < thresh_low) | (vec > thresh_high)] = fill
 
 
-def threshold_flow_local(flow, mag, shape, llim=0.01, ulim=0.99):
-    tmp = mag.copy()
-    nullmask = (mag != 0) & (mag != np.nan)
+def threshold_local(frame, shape, llim=0.01, ulim=0.99):
+    '''
+    threshold_local
+
+    Trim a percentile of values from non-overlapping blocks in 2d array.
+    '''
+    tmp = frame.copy()
+    nullmask = (frame != 0) & (frame != np.nan)
     trim(view_as_blocks(tmp, shape).reshape((-1,np.prod(shape)))
          , axis=1, llim=llim, ulim=ulim, fill=-1)    
+    thresh_mask = nullmask & (tmp != -1)
 
-    flowmask = nullmask & (tmp != -1)
-    flow[~flowmask, :] = 0
-
-    return flowmask
+    return thresh_mask
 
 
-def threshold_flow_global(flow, mag, llim=0.01, ulim=0.99):
-    nullmask = (mag != 0) & (mag != np.nan)    
-    # globrange = np.nanmax(mag) - np.nanmin(mag)
-    globrange = np.sort(mag, axis=None)
+def threshold_global(frame, llim=0.01, ulim=0.99):
+    '''
+    threshold_global
+
+    Trim a percentile of values from array. Output should be same size as input.
+    '''
+    nullmask = (frame != 0) & (frame != np.nan)    
+    globrange = np.sort(frame, axis=None)
     h_thresh = globrange[round(ulim*globrange.size)]
     l_thresh = globrange[round(llim*globrange.size)]
-    flowmask = nullmask & (mag < h_thresh) & (mag > l_thresh)
-    flow[~flowmask, :] = 0
+    thresh_mask = nullmask & (frame < h_thresh) & (frame > l_thresh)
 
-    return flowmask
+    return thresh_mask, (l_thresh, h_thresh)
+    
 
 def init():
+    # global frames (frames is a global variable here)
     imdisp.set_data(np.zeros_like(frames[0]))
     b_latdiv.set_height(0)
     b_verdiv.set_height(0)
@@ -199,6 +181,12 @@ def generate2dTemplates(maskShape, toplim=(0,0.5), botlim=(0.5,1)
 
 
 def fill_padded_edges(frame,paddedFrame,shape):
+    '''
+    fill_padded_edges
+
+    Just fills in the borders of a (preallocated) padded frame with the edges of
+    the original frame.
+    '''
     bH, bW = shape[0]//2, shape[1]//2
     paddedFrame[bH:-bH, bW:-bW] = frame # copy original frame
     bcorners_y, bcorners_x = np.array([0,0,-1,-1]), np.array([0,-1,0,-1])
@@ -224,24 +212,23 @@ def animate(i):
     global logfile
 
     update = [imdisp]    
-    framenum = i + flowStartFrame
-    times[i] = framenum
-
+    t1 = time.time()
+    
     # ------------------------------------------------------------
     # Compute optical flow
     # ------------------------------------------------------------    
+    # grab the current frame, update indices
     clrframe = framegrabber.next()
     currFrame = cv2.cvtColor(clrframe, cv2.COLOR_BGR2GRAY)
+    framenum = i + flowStartFrame
+    times[i] = framenum
+
+    
     prvs = sum(frames) / float(opts.frameavg)
     nxt = (sum(frames[1:]) + currFrame) / float(opts.frameavg)
     flow = cv2.calcOpticalFlowFarneback(prvs[startY:stopY,startX:stopX]
                                         , nxt[startY:stopY,startX:stopX]
                                         , **params)
-    # flow = liu_flow(prvs[startY:stopY,startX:stopX]
-    #                 , nxt[startY:stopY,startX:stopX])
-    # flow = calcOpticalFlowHS(prvs[startY:stopY,startX:stopX]
-    #                          , nxt[startY:stopY,startX:stopX]
-    #                          , lam=10)
     params['flow'] = flow.copy()
     mag, angle = cv2.cartToPolar(flow[...,0], flow[...,1])
 
@@ -249,16 +236,15 @@ def animate(i):
     # Remove outlier flow
     # ------------------------------------------------------------    
     if opts.nofilt:
-        threshmask = flowMask
+        thresh_mask = flowMask
     else:
         # clean up flow estimates, remove outliers
-        threshmask = threshold_flow_local(flow, mag, shape=(16,16)
-                                          , llim=0, ulim=0.96)
-        threshmask |= threshold_flow_global(flow, mag, llim=0.00, ulim=0.99)
-        threshmask |= mag > 1e-9
-        flow[~threshmask] = 0
-        mag[~threshmask] = 0
-    params['flow'] = np.copy(flow)  # save current flow values for next call
+        thresh_mask = threshold_local(mag, shape=(16,16), llim=0, ulim=0.96)
+        thresh_mask |= threshold_global(mag, llim=0.00, ulim=0.99)[0]
+        thresh_mask |= mag > 1e-9 # absolute threshold 
+        flow[~thresh_mask] = 0
+        mag[~thresh_mask] = 0
+    params['flow'] = np.copy(flow)  # save current flow values for next iter
 
     # ------------------------------------------------------------
     # estimate the location of the FoE
@@ -266,7 +252,7 @@ def animate(i):
     dt=4
     fill_padded_edges(angle, padded, foeKsz)
     S = generic2dFilter(padded, foeKsz, matchWin, padded=True, step=dt)
-    participants = generic2dFilter(threshmask, foeKsz, np.sum
+    participants = generic2dFilter(thresh_mask, foeKsz, np.sum
                                    , mode='constant', step=dt)
     S /= participants
     foe_y, foe_x = np.unravel_index(np.argmin(S), S.shape)
@@ -276,26 +262,20 @@ def animate(i):
     foeMask = np.zeros_like(flowMask)
     foeMask[foe_y-foeKsz[0]//2:foe_y+foeKsz[0]//2
             , foe_x-foeKsz[1]//2:foe_x+foeKsz[1]//2] = True
-    foe_tmask, foe_bmask, foe_lmask, foe_rmask = generate2dTemplates(flowMask.shape)
-
-    cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
-                  , (foe_x+foeKsz[1]//2, foe_y+foeKsz[0]//2)
-                  , color=(0,255,0))
-    cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
-                  , (foe_x, foe_y+foeKsz[0]//2)
-                  , color=(255,0,0))
+    divTemplates = generate2dTemplates(flowMask.shape)
+    foe_tmask, foe_bmask, foe_lmask, foe_rmask = divTemplates
 
     # ------------------------------------------------------------
     # estimate divergence parameters and ttc for this frame
     # ------------------------------------------------------------
     xDiv = (np.sum(flow[leftMask,0]) - np.sum(flow[rightMask,0])) \
-           /np.sum((leftMask|rightMask) & threshmask)
+           /np.sum((leftMask|rightMask) & thresh_mask)
     yDiv = (np.sum(flow[topMask,1]) - np.sum(flow[bottomMask,1])) \
-           /np.sum((topMask|bottomMask) & threshmask)
+           /np.sum((topMask|bottomMask) & thresh_mask)
     xDiv_ttc = (np.sum(flow[foe_lmask,0]) - np.sum(flow[foe_rmask,0])) \
-               /np.sum((foe_lmask|foe_rmask) & threshmask)
+               /np.sum((foe_lmask|foe_rmask) & thresh_mask)
     yDiv_ttc = (np.sum(flow[foe_tmask, 1]) - np.sum(flow[foe_bmask, 1])) \
-               /np.sum((foe_tmask|foe_bmask) & threshmask)
+               /np.sum((foe_tmask|foe_bmask) & thresh_mask)
     ttc = 2/(xDiv_ttc + yDiv_ttc)
 
     # ------------------------------------------------------------    
@@ -304,46 +284,51 @@ def animate(i):
     history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
     if i > history.shape[1]:
         flowVals[:2, i] = np.sum(history[:2, :]*w_forget/sum(w_forget), axis= 1)
-        m, y0, _, _, std = stats.linregress(times[i-history.shape[1]+1:i+1], history[-1, :]*w_forget/sum(w_forget))
+        m, y0, _, _, std = stats.linregress(times[i-history.shape[1]+1:i+1]
+                                               , history[-1, :]*w_forget \
+                                                 /sum(w_forget))
         flowVals[2, i] =  m*times[i] + y0
     else:
         flowVals[2, i] = ttc
 
     # ------------------------------------------------------------            
     # write out results
-    # ------------------------------------------------------------        
+    # ------------------------------------------------------------
+    t2 = time.time()
+    out = (framenum, xDiv, yDiv, ttc, 100.*confidence, t2-t1)
     if opts.log:
-        print >> logfile, ','.join(map(str,(framenum, xDiv,yDiv,ttc,100.*confidence)))
+        print >> logfile, ','.join(map(str,out))
     if not opts.quiet:
-        out = (framenum, xDiv,yDiv,ttc,100.*confidence)
-        sys.stdout.write("\r%4d %+6.2f %+6.2f %+6.2f %+6.2f" % out)
+        sys.stdout.write("\r%4d %+6.2f %+6.2f %+6.2f %+6.2f %6.2f" % out)
         sys.stdout.flush()
 
     # ------------------------------------------------------------
     # update figure
     # ------------------------------------------------------------    
-    b_latdiv.set_height(flowVals[0,i] if abs(flowVals[0,i]) > 0.01 else 0)
-    b_verdiv.set_height(flowVals[1,i] if abs(flowVals[1,i]) > 0.01 else 0)
-    b_ttc.set_height(flowVals[2,i] if np.sum(mag[threshmask])/mag.size > 0.01 else 0)
+    b_latdiv.set_height(flowVals[0,i])
+    b_verdiv.set_height(flowVals[1,i])
+    b_ttc.set_height(flowVals[2,i])
+    cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
+                  , (foe_x+foeKsz[1]//2, foe_y+foeKsz[0]//2)
+                  , color=(0,255,0))
+    cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
+                  , (foe_x, foe_y+foeKsz[0]//2)
+                  , color=(255,0,0))
+
     if opts.vis == "color_overlay":
         cf.colorFlow(flow, clrframe[...,::-1]
-                     , slice(startX,stopX)
-                     , slice(startY,stopY)
-                     , threshmask)
+                     , slice(startX,stopX), slice(startY,stopY), thresh_mask)
         imdisp.set_data(clrframe[..., ::-1])
     elif opts.vis == "color":
         imdisp.set_data(cf.flowToColor(flow))
     elif opts.vis == "quiver":
         update.append(q) # add this object to those that are to be updated
-        q.set_UVC(flow[skiplines//2:-skiplines//2+1:skiplines
-                       , skiplines//2:-skiplines//2+1:skiplines, 0]
-                  , flow[skiplines//2:-skiplines//2+1:skiplines
-                         , skiplines//2:-skiplines//2+1:skiplines, 1]
-                  , mag[skiplines//2:-skiplines//2+1:skiplines
-                         , skiplines//2:-skiplines//2+1:skiplines]*255/(np.max(mag)-np.min(mag)))
+        q.set_UVC(flow[flow_strides, flow_strides, 0]
+                  , flow[flow_strides, flow_strides, 1]
+                  , mag[flow_strides]*255/(np.max(mag)-np.min(mag)))
         imdisp.set_data(clrframe[..., ::-1])
 
-    # shift into the frame buffer
+    # shift the frame buffer
     frames[:-1] = frames[1:]; frames[-1] = currFrame
 
     update.extend([b_latdiv, b_verdiv, b_ttc])
@@ -420,14 +405,14 @@ if opts.video is not None:
                if opts.stop is None else opts.stop
     if startFrame != 0: cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
     framegrabber= (cap.read()[1][::opts.decimate,::opts.decimate,:].astype(np.uint8)
-                   for framenum in range(startFrame, endFrame+1))
+                   for framenum in range(startFrame, endFrame))
 elif opts.capture is not None:
     opts.show = True
     cap = cv2.VideoCapture(opts.capture)
     startFrame = 0
     endFrame = 1000 if opts.stop is None else opts.stop
     framegrabber= (cap.read()[1][::opts.decimate,::opts.decimate,:].astype(np.uint8)
-                   for framenum in range(startFrame, endFrame+1))
+                   for framenum in range(startFrame, endFrame))
 elif opts.image:
     exit("No support currently")
     cap = None
@@ -478,12 +463,12 @@ botRect = (startX, startY+int(0.5*maskH)), (stopX, stopY)
 #------------------------------------------------------------------------------#    
 
 flow = np.zeros((maskH, maskW, 2), np.float32)
-flowVals = np.zeros((3,flowDataLen+1), np.float32)
+flowVals = np.zeros((3,flowDataLen), np.float32)
 params = {'pyr_scale': 0.65, 'levels': 3, 'winsize': 15
           , 'iterations': 12, 'poly_n': 7, 'poly_sigma': 1.2
           , 'flags': cv2.OPTFLOW_USE_INITIAL_FLOW #| cv2.OPTFLOW_FARNEBACK_GAUSSIAN
           , 'flow': flow}
-times = np.zeros(flowDataLen+1, np.float64)
+times = np.zeros(flowDataLen, np.float64)
 
 # create the FoE matched filter
 foeKsz = (35, 35)
@@ -507,6 +492,8 @@ ax1, ax2, ax3, ax4 = fig.axes
 
 if opts.vis == 'quiver':
     skiplines = opts.flow_sparsity
+    flow_strides = slice(skiplines//2,-skiplines//2+1,skiplines)
+                  
     X, Y, q = setup_quiver(ax1
                            , Xspan=(startX, stopX)
                            , Yspan=(startY, stopY)
@@ -519,10 +506,10 @@ if opts.vis == 'quiver':
 
 if opts.log:
     logfile = open(opts.log,'w')
-    print >> logfile, ','.join(['int','float','float','float','float'])
+    print >> logfile, ','.join(['int','float','float','float','float','float'])
 
 anim = animation.FuncAnimation(fig, animate, init_func=init
-                               , frames=endFrame-startFrame
+                               , frames=endFrame-flowStartFrame
                                , interval=1/5., blit=True)
 if opts.save_ani:
     anim.save(opts.save_ani, fps=15, extra_args=['-vcodec', 'libx264'])
