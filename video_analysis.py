@@ -164,19 +164,19 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=20, scale=
     return X, Y, q
 
 
-def generate2dTemplates(maskShape, toplim=(0,0.5), botlim=(0.5,1)
+def generate2dTemplates(maskTemplate, toplim=(0,0.5), botlim=(0.5,1)
                         , leftlim=(0,0.5), rightlim=(0.5,1)):
     llim, rlim = map(lambda x,y: slice(x*imgW, y*imgW), leftlim, rightlim)
-    blim, tlim = map(lambda x,y: slice(x*imgH, y*imgH), botlim, toplim)
-    topMask = np.ones(maskShape, dtype=np.bool)
-    topMask[tlim, :] = False
-    bottomMask = np.ones(maskShape, dtype=np.bool)
-    bottomMask[blim, :] = False
-    leftMask = np.ones(maskShape, dtype=np.bool)
-    leftMask[:, llim] = False
-    rightMask = np.ones(maskShape, dtype=np.bool)
-    rightMask[:, rlim] = False
-    
+    blim, tlim = map(lambda x,y: slice(x*imgH, y*imgH), toplim, botlim)
+    topMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
+    topMask[blim, :] = False
+    bottomMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
+    bottomMask[tlim, :] = False
+    leftMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
+    leftMask[:, rlim] = False
+    rightMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
+    rightMask[:, llim] = False
+
     return topMask, bottomMask, leftMask, rightMask
 
 
@@ -202,7 +202,14 @@ def fill_padded_edges(frame,paddedFrame,shape):
     paddedFrame[-bH:, :bW]                = frame[-1,0]
     paddedFrame[-bH:, -bW:]               = frame[-1,-1]    
         
-    
+
+def generateFoEkernel(width):
+    bW = width//2
+    y,x = np.mgrid[-bW:bW+1,-bW:bW+1]
+    y[bW,bW] = y[bW,bW] = 0
+
+    return np.arctan2(y,x)
+
 def animate(i):
     global opts, framegrabber, frames, params, flowStartFrame
     global roi, flowMask, leftMask, rightMask, topMask, bottomMask
@@ -223,7 +230,6 @@ def animate(i):
     framenum = i + flowStartFrame
     times[i] = framenum
 
-    
     prvs = sum(frames) / float(opts.frameavg)
     nxt = (sum(frames[1:]) + currFrame) / float(opts.frameavg)
     flow = cv2.calcOpticalFlowFarneback(prvs[startY:stopY,startX:stopX]
@@ -240,29 +246,59 @@ def animate(i):
     else:
         # clean up flow estimates, remove outliers
         thresh_mask = threshold_local(mag, shape=(16,16), llim=0, ulim=0.96)
-        thresh_mask |= threshold_global(mag, llim=0.00, ulim=0.99)[0]
-        thresh_mask |= mag > 1e-9 # absolute threshold 
+        thresh_mask |= threshold_global(mag, llim=0.00, ulim=0.96)[0]
+        thresh_mask |= mag > 1e-9       # absolute threshold 
         flow[~thresh_mask] = 0
         mag[~thresh_mask] = 0
-    params['flow'] = np.copy(flow)  # save current flow values for next iter
+    params['flow'] = np.copy(flow)      # save current flow values for next iter
 
     # ------------------------------------------------------------
     # estimate the location of the FoE
     # ------------------------------------------------------------    
-    dt=4
-    fill_padded_edges(angle, padded, foeKsz)
-    S = generic2dFilter(padded, foeKsz, matchWin, padded=True, step=dt)
-    participants = generic2dFilter(thresh_mask, foeKsz, np.sum
+    dt=8
+    foeW = 35
+    foeKern = generateFoEkernel(foeW).flatten()
+    matchWin = lambda vec, axis, out: np.sum((foeKern - vec)**2, axis=axis, out=out)
+    
+    # fill_padded_edges(angle, padded, foeKsz)
+    S = generic2dFilter(angle, (foeW, foeW), matchWin, step=dt, mode='constant')
+    participants = generic2dFilter(thresh_mask*mag, (foeW, foeW), np.sum
                                    , mode='constant', step=dt)
     S /= participants
     foe_y, foe_x = np.unravel_index(np.argmin(S), S.shape)
-    confidence = participants[foe_y, foe_x] / np.prod(foeKsz)
+    confidence = participants[foe_y, foe_x] / (foeW**2)
     foe_y, foe_x = startY + foe_y*dt , startX + foe_x*dt
 
-    foeMask = np.zeros_like(flowMask)
-    foeMask[foe_y-foeKsz[0]//2:foe_y+foeKsz[0]//2
-            , foe_x-foeKsz[1]//2:foe_x+foeKsz[1]//2] = True
-    divTemplates = generate2dTemplates(flowMask.shape)
+    foeMask[:] = False
+    foeStrideY = slice(foe_y-foeW//2, foe_y+foeW//2+1)
+    foeStrideX = slice(foe_x-foeW//2, foe_x+foeW//2+1)
+    foeMask[foeStrideY, foeStrideX] = True
+
+    cv2.rectangle(clrframe, (foe_x-foeW//2, foe_y-foeW//2)
+                  , (foe_x+foeW//2, foe_y+foeW//2)
+                  , color=(0,255,0))
+
+    # dt=1
+    # foeW = 5
+    # foeKern = generateFoEkernel(foeW).flatten()
+    # matchWin = lambda vec, axis, out: np.sum((foeKern - vec)**2, axis=axis, out=out)    
+
+    # S = generic2dFilter(angle[foeStrideY, foeStrideX], (foeW,foeW), matchWin
+    #                     , mode='constant', step=dt)
+    # participants = generic2dFilter(thresh_mask[foeStrideY, foeStrideX]
+    #                                , (foeW,foeW), np.sum
+    #                                , mode='constant', step=dt)
+    # S /= participants
+    # foe_y, foe_x = np.unravel_index(np.argmin(S), S.shape)
+    # confidence = participants[foe_y, foe_x] / (foeW**2)
+    # foe_y, foe_x = foe_yb + foe_y*dt , foe_xb + foe_x*dt
+
+    # foeMask[:] = False
+    # foeStrideY = slice(foe_y-foeW//2, foe_y+foeW//2)
+    # foeStrideX = slice(foe_x-foeW//2, foe_x+foeW//2)
+    # foeMask[foeStrideY, foeStrideX] = True
+    
+    divTemplates = generate2dTemplates(foeMask)
     foe_tmask, foe_bmask, foe_lmask, foe_rmask = divTemplates
 
     # ------------------------------------------------------------
@@ -283,10 +319,9 @@ def animate(i):
     # ------------------------------------------------------------
     history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
     if i > history.shape[1]:
-        flowVals[:2, i] = np.sum(history[:2, :]*w_forget/sum(w_forget), axis= 1)
+        flowVals[:2, i] = np.sum(history[:-1,:]*w_forget, axis=1)/sum(w_forget)
         m, y0, _, _, std = stats.linregress(times[i-history.shape[1]+1:i+1]
-                                               , history[-1, :]*w_forget \
-                                                 /sum(w_forget))
+                                            , history[-1,:])
         flowVals[2, i] =  m*times[i] + y0
     else:
         flowVals[2, i] = ttc
@@ -308,13 +343,9 @@ def animate(i):
     b_latdiv.set_height(flowVals[0,i])
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
-    cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
-                  , (foe_x+foeKsz[1]//2, foe_y+foeKsz[0]//2)
-                  , color=(0,255,0))
-    cv2.rectangle(clrframe, (foe_x-foeKsz[1]//2, foe_y-foeKsz[0]//2)
-                  , (foe_x, foe_y+foeKsz[0]//2)
+    cv2.rectangle(clrframe, (foe_x-foeW//2, foe_y-foeW//2)
+                  , (foe_x, foe_y+foeW//2)
                   , color=(255,0,0))
-
     if opts.vis == "color_overlay":
         cf.colorFlow(flow, clrframe[...,::-1]
                      , slice(startX,stopX), slice(startY,stopY), thresh_mask)
@@ -325,7 +356,7 @@ def animate(i):
         update.append(q) # add this object to those that are to be updated
         q.set_UVC(flow[flow_strides, flow_strides, 0]
                   , flow[flow_strides, flow_strides, 1]
-                  , mag[flow_strides]*255/(np.max(mag)-np.min(mag)))
+                  , mag[flow_strides, flow_strides]*255/(np.max(mag)-np.min(mag)))
         imdisp.set_data(clrframe[..., ::-1])
 
     # shift the frame buffer
@@ -452,7 +483,7 @@ print "Processing %d frames." % (endFrame-startFrame)
 roi = np.zeros((imgH, imgW), dtype=np.bool)
 roi[startY:stopY, startX:stopX] = True
 flowMask = np.ones((maskH,maskW), dtype=np.bool)
-topMask, bottomMask, leftMask, rightMask = generate2dTemplates(flowMask.shape)
+topMask, bottomMask, leftMask, rightMask = generate2dTemplates(flowMask)
 leftRect = (startX, startY), (startX+int(0.5*maskW), stopY)
 rightRect = (startX+int(0.5*maskW), startY), (stopX, stopY)
 topRect = (startX, startY), (stopX, startY+int(0.5*maskH))
@@ -471,13 +502,11 @@ params = {'pyr_scale': 0.65, 'levels': 3, 'winsize': 15
 times = np.zeros(flowDataLen, np.float64)
 
 # create the FoE matched filter
-foeKsz = (35, 35)
-y,x = np.mgrid[-foeKsz[0]//2:foeKsz[0]//2,-foeKsz[1]//2:foeKsz[1]//2]
-y[foeKsz[0]//2,foeKsz[1]//2] = y[foeKsz[0]//2,foeKsz[1]//2] = 0
-foeKern = np.arctan2(y,x).flatten()
-
+foeW = 35
+foeKern = generateFoEkernel(foeW).flatten()
+foeMask = np.zeros_like(flowMask)                        
 padded = np.pad(np.zeros((maskH,maskW),dtype=np.float32)
-                , (foeKsz[0]//2,foeKsz[1]//2), mode='constant')
+                , (foeW//2,foeW//2), mode='constant')
 history = np.zeros((3,8))
 matchWin = lambda vec, axis, out: np.sum((foeKern - vec)**2, axis=axis, out=out)
 w_forget = map(lambda x: 1-np.exp(-x/1.5), np.arange(1,history.shape[1]+1))
@@ -497,7 +526,7 @@ if opts.vis == 'quiver':
     X, Y, q = setup_quiver(ax1
                            , Xspan=(startX, stopX)
                            , Yspan=(startY, stopY)
-                           , scale=opts.decimate*2
+                           , scale=opts.decimate
                            , skiplines=skiplines)
 
 #------------------------------------------------------------------------------#
