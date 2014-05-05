@@ -67,18 +67,6 @@ def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False, 
                 ,axis=2, out=out)
 
 
-def trim(vec, axis, llim=0.05, ulim=0.95, fill=0):
-    '''
-    trim
-
-    Threshold a 2d array of vectors using a percentile.
-    '''
-    vrange = np.sort(vec,axis=axis)
-    thresh_low = vrange[ ..., [round(llim*vrange.shape[axis])] ]
-    thresh_high = vrange[ ..., [round(ulim*vrange.shape[axis])] ]
-    vec[..., (vec < thresh_low) | (vec > thresh_high)] = fill
-
-
 def threshold_local(frame, shape, llim=0.01, ulim=0.99):
     '''
     threshold_local
@@ -87,8 +75,15 @@ def threshold_local(frame, shape, llim=0.01, ulim=0.99):
     '''
     tmp = frame.copy()
     nullmask = (frame != 0) & (frame != np.nan)
-    trim(view_as_blocks(tmp, shape).reshape((-1,np.prod(shape)))
-         , axis=1, llim=llim, ulim=ulim, fill=-1)    
+
+    rowblocks = view_as_blocks(tmp, shape).reshape((-1,np.prod(shape)))
+    vrange = np.sort(rowblocks, axis=1)
+    llimIdx, ulimIdx = round(llim*np.prod(shape)), round(ulim*np.prod(shape))
+
+    thresh_low = vrange[ ..., [llimIdx] ]
+    thresh_high = vrange[ ..., [ulimIdx] ]    
+    rowblocks[..., (rowblocks < thresh_low) | (rowblocks > thresh_high)] = -1
+    
     thresh_mask = nullmask & (tmp != -1)
 
     return thresh_mask
@@ -145,7 +140,7 @@ def setup_plot(img):
 
     for ax in (ax2,ax3,ax4):
         ax.set_xlim(0,1); ax.set_ylim(-1,1)
-    ax4.set_ylim(0,100)
+    ax4.set_ylim(0,10)
     fig.tight_layout()
 
     return fig, imdisp, b_latdiv, b_verdiv, b_ttc
@@ -165,21 +160,26 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=20, scale=
     return X, Y, q
 
 
-def generate2dTemplates(maskTemplate, toplim=(0,0.5), botlim=(0.5,1)
-                        , leftlim=(0,0.5), rightlim=(0.5,1)):
-    maskH, maskW = maskTemplate.shape
-    llim, rlim = map(lambda x,y: slice(x*maskW, y*maskW), leftlim, rightlim)
-    blim, tlim = map(lambda x,y: slice(x*maskH, y*maskH), toplim, botlim)
-    topMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
-    topMask[blim, :] = False
-    bottomMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
-    bottomMask[tlim, :] = False
-    leftMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
-    leftMask[:, rlim] = False
-    rightMask = np.ones(maskTemplate.shape, dtype=np.bool) & maskTemplate
-    rightMask[:, llim] = False
+def generate2dTemplates(p0, p1, shape, mask=None):
+    startX, startY = p0
+    stopX, stopY = p1
 
-    return topMask, bottomMask, leftMask, rightMask
+    maskH, maskW = stopY-startY, stopX-startX
+    midH, midW = maskH//2+startY, maskW//2+startX
+
+    if mask is None:
+        mask = np.zeros((maskH,maskW), dtype=np.bool)
+
+    tmask = np.zeros(shape, dtype=np.bool)
+    tmask[startY:midH, startX:stopX] = True
+    bmask = np.zeros(shape, dtype=np.bool)
+    bmask[midH:stopY, startX:stopX] = True
+    lmask = np.zeros(shape, dtype=np.bool)
+    lmask[startY:stopY, startX:midW] = True
+    rmask = np.zeros(shape, dtype=np.bool)
+    rmask[startY:stopY, midW:stopX] = True
+
+    return tmask&mask, bmask&mask, lmask&mask, rmask&mask
 
 
 def fill_padded_edges(frame,paddedFrame,shape):
@@ -213,10 +213,9 @@ def generateFoEkernel(width):
 
 def animate(i):
     global opts, framegrabber, frames, params, flowStartFrame
-    global roi, flowMask, leftMask, rightMask, topMask, bottomMask
+    global roi, flowMask, lmask, rmask, tmask, bmask
     global flowVals, times, history
     global ax1, ax2
-    global xDiv, yDiv, ttc, confidence
     global logfile
 
     update = [imdisp]    
@@ -244,8 +243,8 @@ def animate(i):
         thresh_mask = flowMask
     else:
         # clean up flow estimates, remove outliers
-        thresh_mask = threshold_local(mag, shape=(10,10), llim=0, ulim=0.96)
-        thresh_mask |= threshold_global(mag, llim=0.00, ulim=0.96)[0]
+        # thresh_mask = threshold_local(mag, shape=(20,20), llim=0, ulim=0.96)
+        thresh_mask = threshold_global(mag, llim=0.00, ulim=0.96)[0]
         thresh_mask |= mag > 1e-9       # absolute threshold 
         flow[~thresh_mask] = 0
         mag[~thresh_mask] = 0
@@ -253,57 +252,49 @@ def animate(i):
     # ------------------------------------------------------------
     # estimate the location of the FoE
     # ------------------------------------------------------------    
-    dt=2
-    foeW = 31
-    foeKern = generateFoEkernel(foeW).flatten()
-    matchWin = lambda vec, axis, out: np.sum((foeKern - vec)**2, axis=axis, out=out)
-    
-    # fill_padded_edges(angle, padded, foeKsz)
     S = generic2dFilter(angle, (foeW, foeW), matchWin, step=dt, padded=True)
-    matchWin = lambda vec, axis, out: np.sum(vec, axis=axis, out=out)
-    participants = generic2dFilter(thresh_mask*mag, (foeW, foeW), matchWin
+    participants = generic2dFilter(thresh_mask, (foeW, foeW), np.sum
                                    , padded=True, step=dt)
     S /= participants
     foe_y, foe_x = np.unravel_index(np.argmin(S), S.shape)
     confidence= participants[foe_y, foe_x] / (foeW**2)
     foe_y, foe_x = startY + foeW//2 + foe_y*dt , startX + foeW//2 + foe_x*dt
-    foeMask[:] = False
-    foeStrideY = slice(foe_y-foeW//2, foe_y+foeW//2+1)
-    foeStrideX = slice(foe_x-foeW//2, foe_x+foeW//2+1)
-    foeMask[foeStrideY, foeStrideX] = True
-
-    divTemplates = generate2dTemplates(foeMask)
+    p0, p1 = (foe_x-foeW//2, foe_y-foeW//2), (foe_x+foeW//2, foe_y+foeW//2)
+    divTemplates = generate2dTemplates(p0, p1, thresh_mask.shape, thresh_mask)
     foe_tmask, foe_bmask, foe_lmask, foe_rmask = divTemplates
 
     # ------------------------------------------------------------
     # estimate divergence parameters and ttc for this frame
     # ------------------------------------------------------------
-    xDiv = (np.sum(flow[rightMask,0]) - np.sum(flow[leftMask,0])) \
-           /np.sum((leftMask|rightMask) & thresh_mask)
-    yDiv = (-np.sum(flow[bottomMask,1]) + np.sum(flow[topMask,1])) \
-           /np.sum((topMask|bottomMask) & thresh_mask)
-    xDiv_ttc = (np.sum(flow[foe_rmask,0]) - np.sum(flow[foe_lmask,0])) \
-               /np.sum((foe_lmask|foe_rmask) & thresh_mask)
-    yDiv_ttc = (-np.sum(flow[foe_bmask, 1]) + np.sum(flow[foe_tmask, 1])) \
-               /np.sum((foe_tmask|foe_bmask) & thresh_mask)
-    ttc = 2/(xDiv_ttc + yDiv_ttc + np.finfo(np.float32).eps)
+    xDiv = (np.sum(flow[rmask,0]) - np.sum(flow[lmask,0])) \
+           /np.sum((lmask|rmask) & thresh_mask)
+    yDiv = (-np.sum(flow[bmask,1]) + np.sum(flow[tmask,1])) \
+           /np.sum((tmask|bmask) & thresh_mask)
+    xDiv_ttc = (np.sum(flow[foe_rmask,0]) - np.sum(flow[foe_lmask,0]))
+               # /np.sum((foe_lmask|foe_rmask))
+    yDiv_ttc = (-np.sum(flow[foe_bmask, 1]) + np.sum(flow[foe_tmask, 1]))
+               # /np.sum((foe_tmask|foe_bmask))
+    ttc = 2/(abs(xDiv) + abs(yDiv) + np.finfo(np.float64).eps)
     # ------------------------------------------------------------    
     # use estimation history to estimate new values
     # ------------------------------------------------------------
-    history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv_ttc,yDiv_ttc,ttc)
+    history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
     if i > history.shape[1]:
-        flowVals[:, i] = np.sum(history*w_forget, axis=1)/sum(w_forget)
-        # m, y0, _, _, std = stats.linregress(times[i-history.shape[1]+1:i+1]
-        #                                     , history[-1,:])
+        flowVals[:-1, i] = np.sum(history[:-1]*w_forget, axis=1)/sum(w_forget)
+        # flowVals[-1, i] = np.median(history[-1,-3:])
+
+        m, y0, _, _, std = stats.linregress(np.arange(5)
+                                            , flowVals[-1,i-4:i+1]*w_forget[:5]/sum(w_forget[:5]))
         # flowVals[2, i] =  m*times[i] + y0
+        flowVals[2, i] = np.median(history[-1, i-2:i+1])
     else:
-        flowVals[:, i] = (xDiv_ttc,yDiv_ttc,ttc)
+        flowVals[:, i] = (xDiv,yDiv,ttc)
 
     # ------------------------------------------------------------            
     # write out results
     # ------------------------------------------------------------
     t2 = time.time()
-    out = (framenum, xDiv_ttc, yDiv_ttc, ttc, 100.*confidence, t2-t1)
+    out = (framenum, xDiv, yDiv, ttc, 100.*confidence, t2-t1)
     if opts.log:
         print >> logfile, ','.join(map(str,out))
     if not opts.quiet:
@@ -316,10 +307,10 @@ def animate(i):
     b_latdiv.set_height(flowVals[0,i])
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
-    cv2.rectangle(clrframe, (foe_x-foeW//2, foe_y-foeW//2)
+    cv2.rectangle(clrframe, p0
                   , (foe_x, foe_y+foeW//2)
                   , color=(255,0,0))
-    cv2.rectangle(clrframe, (foe_x-foeW//2, foe_y-foeW//2)
+    cv2.rectangle(clrframe, p0
                   , (foe_x+foeW//2, foe_y+foeW//2)
                   , color=(0,255,0))
     if opts.vis == "color_overlay":
@@ -459,7 +450,9 @@ print "Processing %d frames." % (endFrame-startFrame)
 roi = np.zeros((imgH, imgW), dtype=np.bool)
 roi[startY:stopY, startX:stopX] = True
 flowMask = np.ones((maskH,maskW), dtype=np.bool)
-topMask, bottomMask, leftMask, rightMask = generate2dTemplates(flowMask)
+divTemplates = generate2dTemplates((startX,startY),(stopX,stopY)
+                                   ,flowMask.shape,flowMask)
+tmask, bmask, lmask, rmask = divTemplates
 leftRect = (startX, startY), (startX+int(0.5*maskW), stopY)
 rightRect = (startX+int(0.5*maskW), startY), (stopX, stopY)
 topRect = (startX, startY), (stopX, startY+int(0.5*maskH))
@@ -477,15 +470,13 @@ params = {'pyr_scale': 0.65, 'levels': 3, 'winsize': 25
 times = np.zeros(flowDataLen, np.float64)
 
 # create the FoE matched filter
-foeW = 35
-foeKern = generateFoEkernel(foeW)
-foeKern = foeKern.flatten()
-foeMask = np.zeros_like(flowMask)                        
-
-history = np.zeros((3,8))
+dt=4
+foeW = 13
+foeKern = generateFoEkernel(foeW).flatten()
 matchWin = lambda vec, axis, out: np.sum((foeKern - vec)**2, axis=axis, out=out)
+
+history = np.zeros((3,15))
 w_forget = map(lambda x: 1-np.exp(-x/3.), np.arange(1,history.shape[1]+1))
-xDiv=yDiv=ttc=confidence=0
 
 #------------------------------------------------------------------------------#
 # Set up figure for interactive plotting
@@ -510,6 +501,7 @@ if opts.vis == 'quiver':
 
 if opts.log:
     logfile = open(opts.log,'w')
+    print >> logfile, '#' + ' '.join(sys.argv)
     print >> logfile, ','.join(['int','float','float','float','float','float'])
     print >> logfile, ','.join(['frame','xdiv','ydiv','ttc','confidence','runtime'])
 
