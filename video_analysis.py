@@ -29,6 +29,7 @@ import matplotlib.animation as animation
 import color_flow as cf
 import sys, time
 import scipy.stats as stats
+import brewer2mpl as b2m
 from skimage.util import view_as_windows, view_as_blocks
 
 
@@ -140,7 +141,7 @@ def setup_plot(img):
 
     for ax in (ax2,ax3,ax4):
         ax.set_xlim(0,1); ax.set_ylim(-1,1)
-    ax4.set_ylim(0,10)
+    ax4.set_ylim(0,25)
     fig.tight_layout()
 
     return fig, imdisp, b_latdiv, b_verdiv, b_ttc
@@ -153,10 +154,9 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=20, scale=
                     , startX+skiplines//2:stopX+1-skiplines//2:skiplines]
     q = axis.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
                     , np.dstack((X,Y)), units='x', scale=1/float(scale)
-                    , angles='uv', alpha=0.7, edgecolor='k', pivot='tail'
-                    , width=1.5, linewidth=0.1, headwidth=3
-                    , headlength=5, headaxislength=5
-                    , cmap=plt.cm.cool)
+                    , angles='uv', alpha=0.5, edgecolor='k', pivot='tail'
+                    , width=0.6, linewidth=0.1
+                    , cmap=b2m.get_map('RdPu', 'Sequential',9).get_mpl_colormap())
     return X, Y, q
 
 
@@ -243,9 +243,9 @@ def animate(i):
         thresh_mask = flowMask
     else:
         # clean up flow estimates, remove outliers
-        # thresh_mask = threshold_local(mag, shape=(20,20), llim=0, ulim=0.96)
+        thresh_mask = threshold_local(mag, shape=(10,10), llim=0.02, ulim=0.96)
         thresh_mask = threshold_global(mag, llim=0.00, ulim=0.96)[0]
-        thresh_mask |= mag > 1e-9       # absolute threshold 
+        thresh_mask |= mag > 1e-6       # absolute threshold 
         flow[~thresh_mask] = 0
         mag[~thresh_mask] = 0
 
@@ -286,7 +286,8 @@ def animate(i):
         m, y0, _, _, std = stats.linregress(np.arange(5)
                                             , flowVals[-1,i-4:i+1]*w_forget[:5]/sum(w_forget[:5]))
         # flowVals[2, i] =  m*times[i] + y0
-        flowVals[2, i] = np.median(history[-1, i-2:i+1])
+        # flowVals[2, i] = np.median(history[-1, -3:])
+        flowVals[2, i] = stats.trim_mean(history[-1, -5:],0.2)
     else:
         flowVals[:, i] = (xDiv,yDiv,ttc)
 
@@ -307,12 +308,8 @@ def animate(i):
     b_latdiv.set_height(flowVals[0,i])
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
-    cv2.rectangle(clrframe, p0
-                  , (foe_x, foe_y+foeW//2)
-                  , color=(255,0,0))
-    cv2.rectangle(clrframe, p0
-                  , (foe_x+foeW//2, foe_y+foeW//2)
-                  , color=(0,255,0))
+    cv2.rectangle(clrframe, p0, (foe_x, foe_y+foeW//2), color=(255,0,0))
+    cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
     if opts.vis == "color_overlay":
         cf.colorFlow(flow, clrframe[...,::-1]
                      , slice(startX,stopX), slice(startY,stopY), thresh_mask)
@@ -492,7 +489,7 @@ if opts.vis == 'quiver':
     X, Y, q = setup_quiver(ax1
                            , Xspan=(startX, stopX)
                            , Yspan=(startY, stopY)
-                           , scale=2
+                           , scale=1
                            , skiplines=skiplines)
 
 #------------------------------------------------------------------------------#
