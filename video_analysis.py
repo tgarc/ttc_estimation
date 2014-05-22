@@ -32,6 +32,8 @@ import scipy.stats as stats
 import brewer2mpl as b2m
 from skimage.util import view_as_windows, view_as_blocks
 
+codes = b2m.get_map('YlOrRd', 'sequential', 3)
+
 
 def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False, step=1):
     '''
@@ -42,7 +44,7 @@ def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False, 
     flattened blocks from the original image, axis is the axis that sequences
     the blocks and out is an optional user input array to be assigned to.
 
-    Parameters
+    parameters
     ----------
     mode : string
     Decides how to pad the array. See numpy's pad function for a
@@ -85,9 +87,7 @@ def threshold_local(frame, shape, llim=0.01, ulim=0.99):
     thresh_high = vrange[ ..., [ulimIdx] ]    
     rowblocks[..., (rowblocks < thresh_low) | (rowblocks > thresh_high)] = -1
     
-    thresh_mask = nullmask & (tmp != -1)
-
-    return thresh_mask
+    return nullmask & (tmp != -1)
 
 
 def threshold_global(frame, llim=0.01, ulim=0.99):
@@ -102,7 +102,7 @@ def threshold_global(frame, llim=0.01, ulim=0.99):
     l_thresh = globrange[round(llim*globrange.size)]
     thresh_mask = nullmask & (frame < h_thresh) & (frame > l_thresh)
 
-    return thresh_mask, (l_thresh, h_thresh)
+    return thresh_mask, l_thresh, h_thresh
     
 
 def init():
@@ -134,14 +134,14 @@ def setup_plot(img):
     ax3.set_title("Vertical Divergence")
     ax4.set_title("TTC")
 
-    imdisp = ax1.imshow(img,plt.cm.gray)
+    imdisp = ax1.imshow(img,plt.cm.gray,interpolation='none')
     b_latdiv, = ax2.bar(0.1, 0, 0.8, color='m')
     b_verdiv, = ax3.bar(0.1, 0, 0.8, color='orange')
     b_ttc, = ax4.bar(0.1, 0, 0.8, color='g')
 
     for ax in (ax2,ax3,ax4):
         ax.set_xlim(0,1); ax.set_ylim(-1,1)
-    ax4.set_ylim(0,25)
+    ax4.set_ylim(-20,20)
     fig.tight_layout()
 
     return fig, imdisp, b_latdiv, b_verdiv, b_ttc
@@ -155,7 +155,7 @@ def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=20, scale=
     q = axis.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
                     , np.dstack((X,Y)), units='x', scale=1/float(scale)
                     , angles='uv', alpha=0.5, edgecolor='k', pivot='tail'
-                    , width=0.6, linewidth=0.1
+                    , linewidth=0.1
                     , cmap=b2m.get_map('RdPu', 'Sequential',9).get_mpl_colormap())
     return X, Y, q
 
@@ -168,7 +168,7 @@ def generate2dTemplates(p0, p1, shape, mask=None):
     midH, midW = maskH//2+startY, maskW//2+startX
 
     if mask is None:
-        mask = np.zeros((maskH,maskW), dtype=np.bool)
+        mask = np.ones((maskH,maskW), dtype=np.bool)
 
     tmask = np.zeros(shape, dtype=np.bool)
     tmask[startY:midH, startX:stopX] = True
@@ -211,12 +211,14 @@ def generateFoEkernel(width):
     angle = np.arctan2(y,x)
     return angle
 
+
 def animate(i):
     global opts, framegrabber, frames, params, flowStartFrame
     global roi, flowMask, lmask, rmask, tmask, bmask
     global flowVals, times, history
     global ax1, ax2
     global logfile
+    global codes
 
     update = [imdisp]    
     t1 = time.time()
@@ -243,23 +245,26 @@ def animate(i):
         thresh_mask = flowMask
     else:
         # clean up flow estimates, remove outliers
-        thresh_mask = threshold_local(mag, shape=(10,10), llim=0.02, ulim=0.96)
-        thresh_mask = threshold_global(mag, llim=0.00, ulim=0.96)[0]
-        thresh_mask |= mag > 1e-6       # absolute threshold 
+        # thresh_mask = threshold_local(mag, shape=(20,20), llim=0, ulim=0.96)
+        # global_mask = threshold_global(mag, llim=0.00, ulim=0.99)[0]
+        global_mask = np.ones_like(flowMask)
+        thresh_mask = (mag > 1e-5) & global_mask
         flow[~thresh_mask] = 0
         mag[~thresh_mask] = 0
 
     # ------------------------------------------------------------
     # estimate the location of the FoE
     # ------------------------------------------------------------    
-    S = generic2dFilter(angle, (foeW, foeW), matchWin, step=dt, padded=True)
-    participants = generic2dFilter(thresh_mask, (foeW, foeW), np.sum
-                                   , padded=True, step=dt)
-    S /= participants
-    foe_y, foe_x = np.unravel_index(np.argmin(S), S.shape)
-    confidence= participants[foe_y, foe_x] / (foeW**2)
-    foe_y, foe_x = startY + foeW//2 + foe_y*dt , startX + foeW//2 + foe_x*dt
+    # S = generic2dFilter(angle, (foeW, foeW), matchWin, step=dt, padded=True)
+    # participants = generic2dFilter(thresh_mask, (foeW, foeW), np.sum
+    #                                , padded=True, step=dt)
+    # S /= participants
+    # foe_y_subsearch, foe_x_subsearch = np.unravel_index(np.argmin(S), S.shape)
+    # foe_y, foe_x = startY + foeW//2 + foe_y_subsearch*dt , startX + foeW//2 + foe_x_subsearch*dt
+    foe_x, foe_y = startX + maskW//2, startY + maskW//2
     p0, p1 = (foe_x-foeW//2, foe_y-foeW//2), (foe_x+foeW//2, foe_y+foeW//2)
+    # confidence= participants[foe_y_subsearch, foe_x_subsearch] / (foeW**2)
+    confidence=0
     divTemplates = generate2dTemplates(p0, p1, thresh_mask.shape, thresh_mask)
     foe_tmask, foe_bmask, foe_lmask, foe_rmask = divTemplates
 
@@ -268,26 +273,27 @@ def animate(i):
     # ------------------------------------------------------------
     xDiv = (np.sum(flow[rmask,0]) - np.sum(flow[lmask,0])) \
            /np.sum((lmask|rmask) & thresh_mask)
-    yDiv = (-np.sum(flow[bmask,1]) + np.sum(flow[tmask,1])) \
+    yDiv = (np.sum(flow[tmask,1]) - np.sum(flow[bmask,1])) \
            /np.sum((tmask|bmask) & thresh_mask)
-    xDiv_ttc = (np.sum(flow[foe_rmask,0]) - np.sum(flow[foe_lmask,0]))
-               # /np.sum((foe_lmask|foe_rmask))
-    yDiv_ttc = (-np.sum(flow[foe_bmask, 1]) + np.sum(flow[foe_tmask, 1]))
-               # /np.sum((foe_tmask|foe_bmask))
-    ttc = 2/(abs(xDiv) + abs(yDiv) + np.finfo(np.float64).eps)
+    xDiv_foe = (np.sum(flow[foe_rmask,0]) - np.sum(flow[foe_lmask,0])) \
+               /np.sum((foe_lmask|foe_rmask))
+    yDiv_foe = (np.sum(flow[foe_tmask, 1]) - np.sum(flow[foe_bmask, 1])) \
+               /np.sum((foe_tmask|foe_bmask))
+    ttc = 2/(xDiv + yDiv + np.finfo(np.float64).eps)
+    history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
+
     # ------------------------------------------------------------    
     # use estimation history to estimate new values
     # ------------------------------------------------------------
-    history[:, :-1] = history[:, 1:]; history[:, -1] = (xDiv,yDiv,ttc)
     if i > history.shape[1]:
         flowVals[:-1, i] = np.sum(history[:-1]*w_forget, axis=1)/sum(w_forget)
         # flowVals[-1, i] = np.median(history[-1,-3:])
 
-        m, y0, _, _, std = stats.linregress(np.arange(5)
-                                            , flowVals[-1,i-4:i+1]*w_forget[:5]/sum(w_forget[:5]))
+        # m, y0, _, _, std = stats.linregress(np.arange(5)
+        #                                     , flowVals[-1,i-4:i+1]*w_forget[:5]/sum(w_forget[:5]))
         # flowVals[2, i] =  m*times[i] + y0
         # flowVals[2, i] = np.median(history[-1, -3:])
-        flowVals[2, i] = stats.trim_mean(history[-1, -5:],0.2)
+        flowVals[2, i] = stats.trim_mean(history[-1, -5:],0.4)
     else:
         flowVals[:, i] = (xDiv,yDiv,ttc)
 
@@ -309,7 +315,9 @@ def animate(i):
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
     cv2.rectangle(clrframe, p0, (foe_x, foe_y+foeW//2), color=(255,0,0))
-    cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
+    clrframe[mag <= 1e-6, :] = codes.colors[0][::-1]
+    clrframe[~global_mask, :] = codes.colors[-1][::-1]
+    # cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
     if opts.vis == "color_overlay":
         cf.colorFlow(flow, clrframe[...,::-1]
                      , slice(startX,stopX), slice(startY,stopY), thresh_mask)
@@ -399,19 +407,19 @@ if opts.video is not None:
     endFrame = int(cap.get(cv.CV_CAP_PROP_FRAME_COUNT)) \
                if opts.stop is None else opts.stop
     if startFrame != 0: cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
-    framegrabber= (cap.read()[1][::opts.decimate,::opts.decimate,:].astype(np.uint8)
+    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
                    for framenum in range(startFrame, endFrame))
 elif opts.capture is not None:
     opts.show = True
     cap = cv2.VideoCapture(opts.capture)
     startFrame = 0
     endFrame = 1000 if opts.stop is None else opts.stop
-    framegrabber= (cap.read()[1][::opts.decimate,::opts.decimate,:].astype(np.uint8)
+    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
                    for framenum in range(startFrame, endFrame))
 elif opts.image:
     exit("No support currently")
     cap = None
-    framegrabber = (cv2.imread(imgpath)[::opts.decimate,::opts.decimate,:]
+    framegrabber = (cv2.GaussianBlur(cv2.imread(imgpath),opts.decimate+1,opts.decimate)[::opts.decimate,::opts.decimate,:]
                     for imgpath in args)
 else:
     exit("No input mode selected!")
@@ -461,16 +469,16 @@ botRect = (startX, startY+int(0.5*maskH)), (stopX, stopY)
 
 flow = np.zeros((maskH, maskW, 2), np.float32)
 flowVals = np.zeros((3,flowDataLen), np.float32)
-params = {'pyr_scale': 0.65, 'levels': 3, 'winsize': 25
-          , 'iterations': 5, 'poly_n': 7, 'poly_sigma': 1.2
+params = {'pyr_scale': 0.5, 'levels': 4, 'winsize': 25
+          , 'iterations': 10, 'poly_n': 7, 'poly_sigma': 1.2
           , 'flags': cv2.OPTFLOW_FARNEBACK_GAUSSIAN}
 times = np.zeros(flowDataLen, np.float64)
 
 # create the FoE matched filter
 dt=4
-foeW = 13
+foeW = 4
 foeKern = generateFoEkernel(foeW).flatten()
-matchWin = lambda vec, axis, out: np.sum((foeKern - vec)**2, axis=axis, out=out)
+matchWin = lambda vec, axis, out: np.sum((vec-foeKern)**2, axis=axis, out=out)
 
 history = np.zeros((3,15))
 w_forget = map(lambda x: 1-np.exp(-x/3.), np.arange(1,history.shape[1]+1))
@@ -489,7 +497,7 @@ if opts.vis == 'quiver':
     X, Y, q = setup_quiver(ax1
                            , Xspan=(startX, stopX)
                            , Yspan=(startY, stopY)
-                           , scale=1
+                           , scale=opts.flow_sparsity/5.
                            , skiplines=skiplines)
 
 #------------------------------------------------------------------------------#
