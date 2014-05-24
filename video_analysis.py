@@ -91,22 +91,19 @@ def threshold_local(frame, shape, llim=0.01, ulim=0.99):
     return nullmask & (tmp != -1)
 
 
-def trim_global(frame, ulim, llim=None):
+def threshold_global(frame, llim=0.01, ulim=0.99):
     '''
-    trim_global
+    threshold_global
 
-    Trim a number of values from array. Output should be same size as input.
+    Trim a percentile of values from array. Output should be same size as input.
     '''
     nullmask = (frame != 0) & (frame != np.nan)    
     globrange = np.sort(frame, axis=None)
-    h_thresh = globrange[-ulim:][0]
-    thresh_mask = nullmask & (frame < h_thresh)
+    h_thresh = globrange[round(ulim*globrange.size)]
+    l_thresh = globrange[round(llim*globrange.size)]
+    thresh_mask = nullmask & (frame < h_thresh) & (frame > l_thresh)
 
-    if llim is not None:
-        l_thresh = globrange[:llim][-1]
-        thresh_mask &= (frame > l_thresh)
-
-    return thresh_mask, l_thresh if llim is not None else None, h_thresh
+    return thresh_mask, l_thresh, h_thresh
     
 
 def init():
@@ -116,12 +113,12 @@ def init():
     b_latdiv.set_height(0)
     b_verdiv.set_height(0)
     b_ttc.set_height(0)
-    q_foe.set_UVC([],[])
 
     update = [imdisp, foedisp, q_foe, b_ttc, b_verdiv, b_ttc] 
     if opts.vis == "quiver":
+        q_foe.set_UVC([],[])    
         q_img.set_UVC([],[])
-        update.append(q_img)
+        update.extend([q_img, q_foe])
 
     return update
 
@@ -134,9 +131,9 @@ def setup_plot(img,foe):
     ax4 = plt.subplot2grid((4,3), (3, 1))
     ax5 = plt.subplot2grid((4,3), (2, 2), rowspan=2)
 
-    for ax in fig.axes[2:]: ax.set_xticks([])
-    plt.setp(ax2.xaxis.get_ticklabels(), fontsize=8)
-    plt.setp(ax2.yaxis.get_ticklabels(), fontsize=8)
+    for ax in fig.axes:
+        if ax != ax2: ax.set_xticks([])
+    # ax1.set_yticks([])
     ax3.grid(); ax4.grid(); ax5.grid()
     ax2.set_title("Focus of Expansion")
     ax3.set_title("Lateral Divergence")
@@ -245,7 +242,7 @@ def animate(i):
     global logfile
     global codes
 
-    update = [imdisp, foedisp, q_foe]    
+    update = [imdisp, foedisp]    
     t1 = time.time()
     # ------------------------------------------------------------
     # Compute optical flow
@@ -271,7 +268,7 @@ def animate(i):
     else:
         # clean up flow estimates, remove outliers
         # thresh_mask = threshold_local(mag, shape=(20,20), llim=0, ulim=0.96)
-        # global_mask = trim_global(mag, 10)[0]
+        # global_mask = threshold_global(mag, llim=0.00, ulim=0.99)[0]
         global_mask = np.ones_like(flowMask)
         lthresh = 1e-6
         thresh_mask = (mag > lthresh) & global_mask
@@ -288,9 +285,6 @@ def animate(i):
     # foe_y_subsearch, foe_x_subsearch = np.unravel_index(np.argmin(S), S.shape)
     # foe_y, foe_x = startY + foeW//2 + foe_y_subsearch*dt , startX + foeW//2 + foe_x_subsearch*dt
     foe_x, foe_y = startX + maskW//2, startY + maskW//2
-    # bslice = slice(foeW//2,-foeW//2)
-    # foe_x = int(round(np.mean(flow[bslice,bslice,0]))) + foeW//2
-    # foe_y = int(round(np.mean(flow[bslice,bslice,1]))) + foeW//2
     p0, p1 = (foe_x-foeW//2, foe_y-foeW//2), (foe_x+foeW//2, foe_y+foeW//2)
     # confidence= participants[foe_y_subsearch, foe_x_subsearch] / (foeW**2)
     confidence=0
@@ -345,7 +339,6 @@ def animate(i):
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
     foedisp.set_data(clrframe[foeSlice_y, foeSlice_x, ::-1].copy())
-
     clrframe[mag <= lthresh, :] = codes.colors[0][::-1]
     clrframe[~global_mask, :] = codes.colors[-1][::-1]
     cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
@@ -357,20 +350,18 @@ def animate(i):
     elif opts.vis == "color":
         dispim = cf.flowToColor(flow)
     elif opts.vis == "quiver":
-        update.append(q_img) # add this object to those that are to be updated
+        update.extend((q_img, q_foe)) # add this object to those that are to be updated
         q_img.set_UVC(flow[flow_strides, flow_strides, 0]
                       , flow[flow_strides, flow_strides, 1]
                       , mag[flow_strides, flow_strides] \
                         *255/(np.max(mag)-np.min(mag)+EPS))
+        q_foe.set_UVC(flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 0]
+                      , flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 1]
+                      , (mag[flow_strides, flow_strides]
+                         *255/(np.max(mag[foeSlice_y, foeSlice_x])
+                               -np.min(mag[foeSlice_y, foeSlice_x])+EPS)))
         dispim = clrframe[..., ::-1]
     imdisp.set_data(dispim)
-
-    q_foe.set_UVC(flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 0]
-                  , flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 1]
-                  , (mag[flow_strides, flow_strides]
-                     *255/(np.max(mag[foeSlice_y, foeSlice_x])
-                           -np.min(mag[foeSlice_y, foeSlice_x])+EPS)))
-
 
     # shift the frame buffer
     frames[:-1] = frames[1:]; frames[-1] = currFrame
@@ -428,7 +419,7 @@ parser.add_option("--vis", dest="vis"
                   , type="str", default="quiver"
                   , help="Method for flow visualization.")
 parser.add_option("--flow-sparsity", dest="flow_sparsity"
-                  , type="int", default=None
+                  , type="int", default=15
                   , help="Rate at which to downsample image for display.")    
 parser.add_option("-q", "--quiet", dest="quiet"
                   , action="store_true", default=False
@@ -466,8 +457,6 @@ else:
     exit("No input mode selected!")
 opts.p0 = map(float,opts.p0.split(','))
 opts.p1 = map(float,opts.p1.split(','))
-if opts.flow_sparsity is None:
-    opts.flow_sparsity = 20/opts.decimate
 
 #------------------------------------------------------------------------------#
 # set up a frame averager
@@ -534,15 +523,16 @@ fig, imdisp, foedisp, b_latdiv, b_verdiv, b_ttc = setup_plot(np.zeros_like(frame
 ax1, ax2, ax3, ax4, ax5 = fig.axes
 
 skiplines = opts.flow_sparsity
-flow_strides = slice(skiplines//2,-skiplines//2,skiplines)
+flow_strides = slice(skiplines//2,-skiplines//2+1,skiplines)
 
 if opts.vis == 'quiver':
     X, Y, q_img = setup_quiver(ax1
                                , Xspan=(startX, stopX), Yspan=(startY, stopY)
-                               , skiplines=skiplines)
+                               , skiplines=skiplines, width=0.5)
 X, Y, q_foe = setup_quiver(ax2
                            , Xspan=(0,foeW), Yspan=(0,foeW)
-                           , skiplines=2, alpha=1, linewidth=0.25, width=0.2)
+                           , scale=1., skiplines=2
+                           , alpha=1, linewidth=0.25, width=0.25)
 
 #------------------------------------------------------------------------------#
 # Run animation
