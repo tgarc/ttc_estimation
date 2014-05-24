@@ -109,36 +109,39 @@ def threshold_global(frame, llim=0.01, ulim=0.99):
 def init():
     # global frames (frames is a global variable here)
     imdisp.set_data(np.zeros_like(frames[0]))
-    foedisp.set_data(np.zeros_like(frames[0]))    
+    foedisp.set_data(np.zeros((foeW,foeW)))
     b_latdiv.set_height(0)
     b_verdiv.set_height(0)
     b_ttc.set_height(0)
 
-    update = [imdisp, foedisp, b_ttc, b_verdiv, b_ttc]  
+    update = [imdisp, foedisp, q_foe, b_ttc, b_verdiv, b_ttc] 
     if opts.vis == "quiver":
-        q.set_UVC([],[])
-        update.append(q)
+        q_foe.set_UVC([],[])    
+        q_img.set_UVC([],[])
+        update.extend([q_img, q_foe])
 
     return update
 
 
-def setup_plot(img):
+def setup_plot(img,foe):
     fig = plt.figure()
     ax1 = plt.subplot2grid((4,3), (0, 0), colspan=2, rowspan=3)
-    ax2 = plt.subplot2grid((4,3), (0, 2))
-    ax3 = plt.subplot2grid((4,3), (1, 2))
-    ax4 = plt.subplot2grid((4,3), (2, 2))
-    ax5 = plt.subplot2grid((4,3), (3, 2))
+    ax2 = plt.subplot2grid((4,3), (0, 2), rowspan=2)
+    ax3 = plt.subplot2grid((4,3), (3, 0))
+    ax4 = plt.subplot2grid((4,3), (3, 1))
+    ax5 = plt.subplot2grid((4,3), (2, 2), rowspan=2)
 
-    for ax in fig.axes: ax.set_xticks([])
-    ax1.set_yticks([]); ax2.set_yticks([])
+    for ax in fig.axes:
+        if ax != ax2: ax.set_xticks([])
+    # ax1.set_yticks([])
     ax3.grid(); ax4.grid(); ax5.grid()
-    ax2.set_title("Lateral Divergence")
-    ax3.set_title("Vertical Divergence")
-    ax4.set_title("TTC")
+    ax2.set_title("Focus of Expansion")
+    ax3.set_title("Lateral Divergence")
+    ax4.set_title("Vertical Divergence")
+    ax5.set_title("TTC")
 
     imdisp = ax1.imshow(img,plt.cm.gray,interpolation='none')
-    foedisp = ax2.imshow(img,plt.cm.gray,interpolation='none')    
+    foedisp = ax2.imshow(foe,plt.cm.gray,interpolation='none')    
     b_latdiv, = ax3.bar(0.1, 0, 0.8, color='m')
     b_verdiv, = ax4.bar(0.1, 0, 0.8, color='orange')
     b_ttc, = ax5.bar(0.1, 0, 0.8, color='g')
@@ -151,16 +154,19 @@ def setup_plot(img):
     return fig, imdisp, foedisp, b_latdiv, b_verdiv, b_ttc
 
 
-def setup_quiver(axis, Xspan=None, Yspan=None, mask = None, skiplines=20, scale=1):
+def setup_quiver(axis, Xspan, Yspan, mask = None, skiplines=20, scale=1, **kw):
+    def_kw=dict(units='x', scale=1/float(scale)
+                , angles='uv', edgecolor='k', pivot='tail'
+                , linewidth=0.1
+                , cmap=b2m.get_map('RdPu', 'Sequential',9).get_mpl_colormap())
+    if kw: def_kw.update(kw)
+    
     startY, stopY = Yspan
     startX, stopX = Xspan
-    Y, X = np.mgrid[startY+skiplines//2:stopY+1-skiplines//2:skiplines
-                    , startX+skiplines//2:stopX+1-skiplines//2:skiplines]
+    Y, X = np.mgrid[startY+skiplines//2:stopY-skiplines//2:skiplines
+                    , startX+skiplines//2:stopX-skiplines//2:skiplines]
     q = axis.quiver(X, Y, np.zeros_like(X), np.zeros_like(Y)
-                    , np.dstack((X,Y)), units='x', scale=1/float(scale)
-                    , angles='uv', alpha=0.5, edgecolor='k', pivot='tail'
-                    , linewidth=0.1
-                    , cmap=b2m.get_map('RdPu', 'Sequential',9).get_mpl_colormap())
+                    , np.dstack((X,Y)), **def_kw)
     return X, Y, q
 
 
@@ -332,10 +338,11 @@ def animate(i):
     b_latdiv.set_height(flowVals[0,i])
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
-    # cv2.rectangle(clrframe, p0, (foe_x, foe_y+foeW//2), color=(255,0,0))
+    foedisp.set_data(clrframe[foeSlice_y, foeSlice_x, ::-1].copy())
     clrframe[mag <= lthresh, :] = codes.colors[0][::-1]
     clrframe[~global_mask, :] = codes.colors[-1][::-1]
-    # cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
+    cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
+    cv2.rectangle(clrframe, p0, (foe_x, foe_y+foeW//2), color=(255,0,0))
     if opts.vis == "color_overlay":
         cf.colorFlow(flow, clrframe[...,::-1]
                      , slice(startX,stopX), slice(startY,stopY), thresh_mask)
@@ -343,18 +350,23 @@ def animate(i):
     elif opts.vis == "color":
         dispim = cf.flowToColor(flow)
     elif opts.vis == "quiver":
-        update.append(q) # add this object to those that are to be updated
-        q.set_UVC(flow[flow_strides, flow_strides, 0]
-                  , flow[flow_strides, flow_strides, 1]
-                  , mag[flow_strides, flow_strides]*255/(np.max(mag)-np.min(mag)+EPS))
+        update.extend((q_img, q_foe)) # add this object to those that are to be updated
+        q_img.set_UVC(flow[flow_strides, flow_strides, 0]
+                      , flow[flow_strides, flow_strides, 1]
+                      , mag[flow_strides, flow_strides] \
+                        *255/(np.max(mag)-np.min(mag)+EPS))
+        q_foe.set_UVC(flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 0]
+                      , flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 1]
+                      , (mag[flow_strides, flow_strides]
+                         *255/(np.max(mag[foeSlice_y, foeSlice_x])
+                               -np.min(mag[foeSlice_y, foeSlice_x])+EPS)))
         dispim = clrframe[..., ::-1]
     imdisp.set_data(dispim)
-    foedisp.set_data(clrframe[foeSlice_y, foeSlice_x, ::-1])
 
     # shift the frame buffer
     frames[:-1] = frames[1:]; frames[-1] = currFrame
 
-    update.extend([b_latdiv, b_verdiv, b_ttc])
+    update.extend((b_latdiv, b_verdiv, b_ttc))
     return update
 
 
@@ -427,14 +439,14 @@ if opts.video is not None:
     endFrame = int(cap.get(cv.CV_CAP_PROP_FRAME_COUNT)) \
                if opts.stop is None else opts.stop
     if startFrame != 0: cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
-    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
+    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),0.5*opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
                    for framenum in range(startFrame, endFrame))
 elif opts.capture is not None:
     opts.show = True
     cap = cv2.VideoCapture(opts.capture)
     startFrame = 0
     endFrame = 1000 if opts.stop is None else opts.stop
-    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
+    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),0.5*opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
                    for framenum in range(startFrame, endFrame))
 elif opts.image:
     exit("No support currently")
@@ -496,7 +508,7 @@ times = np.zeros(flowDataLen, np.float64)
 
 # create the FoE matched filter
 dt=4
-foeW = 16
+foeW = 15
 foeKern = generateFoEkernel(foeW).flatten()
 matchWin = lambda vec, axis, out: np.sum((vec-foeKern)**2, axis=axis, out=out)
 
@@ -507,18 +519,20 @@ w_forget = map(lambda x: 1-np.exp(-x/3.), np.arange(1,history.shape[1]+1))
 # Set up figure for interactive plotting
 #------------------------------------------------------------------------------#
 
-fig, imdisp, foedisp, b_latdiv, b_verdiv, b_ttc = setup_plot(np.zeros_like(frames[0]))
+fig, imdisp, foedisp, b_latdiv, b_verdiv, b_ttc = setup_plot(np.zeros_like(frames[0]), np.zeros((foeW,foeW)))
 ax1, ax2, ax3, ax4, ax5 = fig.axes
 
+skiplines = opts.flow_sparsity
+flow_strides = slice(skiplines//2,-skiplines//2+1,skiplines)
+
 if opts.vis == 'quiver':
-    skiplines = opts.flow_sparsity
-    flow_strides = slice(skiplines//2,-skiplines//2+1,skiplines)
-                  
-    X, Y, q = setup_quiver(ax1
-                           , Xspan=(startX, stopX)
-                           , Yspan=(startY, stopY)
-                           , scale=opts.flow_sparsity/5.
-                           , skiplines=skiplines)
+    X, Y, q_img = setup_quiver(ax1
+                               , Xspan=(startX, stopX), Yspan=(startY, stopY)
+                               , skiplines=skiplines, width=0.5)
+X, Y, q_foe = setup_quiver(ax2
+                           , Xspan=(0,foeW), Yspan=(0,foeW)
+                           , scale=1., skiplines=2
+                           , alpha=1, linewidth=0.25, width=0.25)
 
 #------------------------------------------------------------------------------#
 # Run animation
