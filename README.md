@@ -37,7 +37,9 @@ network 192.168.56.0
 broadcast 192.168.56.255
 ```
 5. Open /etc/hosts _inside the host machine_ and enter the line
-'''<IP>    <hostname>'''
+'''
+<IP>    <hostname>
+'''
 
 Previous works
 --------------
