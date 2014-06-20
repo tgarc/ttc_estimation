@@ -36,7 +36,13 @@ EPS = np.finfo(np.float64).eps
 codes = b2m.get_map('YlOrRd', 'sequential', 3)
 
 
-def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False, step=1):
+def decimate(img,factor):
+    return cv2.resize(img,tuple(map(lambda x:x/factor,img.shape[-2::-1]))
+                      ,interpolation=cv2.cv.CV_INTER_AREA)
+
+
+def generic2dFilter(frame, shape, func, mode='reflect', out=None, padded=False
+                    , step=1):
     '''
     generic2dFilter
 
@@ -140,8 +146,8 @@ def setup_plot(img,foe):
     ax4.set_title("Vertical Divergence")
     ax5.set_title("TTC")
 
-    imdisp = ax1.imshow(img,plt.cm.gray,interpolation='none')
-    foedisp = ax2.imshow(foe,plt.cm.gray,interpolation='none')    
+    imdisp = ax1.imshow(img,cmap=plt.cm.gray,interpolation='none')
+    foedisp = ax2.imshow(foe,cmap=plt.cm.gray,interpolation='none')    
     b_latdiv, = ax3.bar(0.1, 0, 0.8, color='m')
     b_verdiv, = ax4.bar(0.1, 0, 0.8, color='orange')
     b_ttc, = ax5.bar(0.1, 0, 0.8, color='g')
@@ -158,7 +164,8 @@ def setup_quiver(axis, Xspan, Yspan, mask = None, skiplines=20, scale=1, **kw):
     def_kw=dict(units='x', scale=1/float(scale)
                 , angles='uv', edgecolor='k', pivot='tail'
                 , linewidth=0.1
-                , cmap=b2m.get_map('RdPu', 'Sequential',9).get_mpl_colormap())
+                , cmap = plt.cm.hot)
+                # , cmap=b2m.get_map('RdPu', 'Sequential',9).get_mpl_colormap())
     if kw: def_kw.update(kw)
     
     startY, stopY = Yspan
@@ -203,7 +210,7 @@ def generate2dTemplates(p0, p1, shape, mask=None):
     rmask[startY:stopY, midW:stopX] = True
 
     return tmask&mask, bmask&mask, lmask&mask, rmask&mask
-
+    
 
 def fill_padded_edges(frame,paddedFrame,shape):
     '''
@@ -234,6 +241,25 @@ def generateFoEkernel(width):
     angle = np.arctan2(y,x)
     return angle
 
+def FindFoE(u, v):
+    Y, X = np.indices(u.shape)
+    foe_x, foe_y = np.sum(u*X)/np.sum(u**2), np.sum(v*Y)/np.sum(v**2)
+
+    if np.isnan(foe_x) or np.isnan(foe_y):
+        return (0,0)
+
+    map(int,(foe_x,foe_y))
+    if u.shape[0] <= 5:
+        return foe_x, foe_y
+
+    halfwidth = u.shape[0]//2+1
+    subx, suby = FindFoE(u[foe_y-halfwidth//2:foe_y+halfwidth//2
+                           ,foe_x-halfwidth//2:foe_x+halfwidth//2]
+                         , v[foe_y-halfwidth//2:foe_y+halfwidth//2
+                             ,foe_x-halfwidth//2:foe_x+halfwidth//2])
+
+    return subx+foe_x-halfwidth//2, suby+foe_y-halfwidth//2
+    
 
 def animate(i):
     global opts, framegrabber, frames, params, flowStartFrame
@@ -242,7 +268,7 @@ def animate(i):
     global logfile
     global codes
 
-    update = [imdisp, foedisp]    
+    update = [imdisp, foedisp, q_foe, b_latdiv, b_verdiv, b_ttc]    
     t1 = time.time()
     # ------------------------------------------------------------
     # Compute optical flow
@@ -270,7 +296,7 @@ def animate(i):
         # thresh_mask = threshold_local(mag, shape=(20,20), llim=0, ulim=0.96)
         # global_mask = threshold_global(mag, llim=0.00, ulim=0.99)[0]
         global_mask = np.ones_like(flowMask)
-        lthresh = 1e-6
+        lthresh = 1e-3
         thresh_mask = (mag > lthresh) & global_mask
         flow[~thresh_mask] = 0
         mag[~thresh_mask] = 0
@@ -284,13 +310,17 @@ def animate(i):
     # S /= participants
     # foe_y_subsearch, foe_x_subsearch = np.unravel_index(np.argmin(S), S.shape)
     # foe_y, foe_x = startY + foeW//2 + foe_y_subsearch*dt , startX + foeW//2 + foe_x_subsearch*dt
-    foe_x, foe_y = startX + maskW//2, startY + maskW//2
+    # foe_x, foe_y = FindFoE(flow[...,0][foeW//2:-foeW//2],flow[...,1][foeW//2:-foeW//2])
+    # print
+    # print foe_x, foe_y
+    # foe_x, foe_y = startX + maskW//2, startY + maskW//2
+    foe_x, foe_y = 183, 80
     p0, p1 = (foe_x-foeW//2, foe_y-foeW//2), (foe_x+foeW//2, foe_y+foeW//2)
     # confidence= participants[foe_y_subsearch, foe_x_subsearch] / (foeW**2)
     confidence=0
     divTemplates = generate2dTemplates(p0, p1, thresh_mask.shape, thresh_mask)
     foe_tmask, foe_bmask, foe_lmask, foe_rmask = divTemplates
-    foeSlice_y, foeSlice_x = slice(p0[1],p1[1]), slice(p0[0],p1[0])
+    foeSlice_y, foeSlice_x = slice(p0[1],p1[1]+1), slice(p0[0],p1[0]+1)
 
     # ------------------------------------------------------------
     # estimate divergence parameters and ttc for this frame
@@ -339,8 +369,8 @@ def animate(i):
     b_verdiv.set_height(flowVals[1,i])
     b_ttc.set_height(flowVals[2,i])
     foedisp.set_data(clrframe[foeSlice_y, foeSlice_x, ::-1].copy())
-    clrframe[mag <= lthresh, :] = codes.colors[0][::-1]
-    clrframe[~global_mask, :] = codes.colors[-1][::-1]
+    # clrframe[mag <= lthresh, :] = codes.colors[0][::-1]
+    # clrframe[~global_mask, :] = codes.colors[-1][::-1]
     cv2.rectangle(clrframe, p0, p1, color=(0,255,0))
     cv2.rectangle(clrframe, p0, (foe_x, foe_y+foeW//2), color=(255,0,0))
     if opts.vis == "color_overlay":
@@ -350,23 +380,26 @@ def animate(i):
     elif opts.vis == "color":
         dispim = cf.flowToColor(flow)
     elif opts.vis == "quiver":
-        update.extend((q_img, q_foe)) # add this object to those that are to be updated
+        update.append(q_img) # add this object to those that are to be updated
         q_img.set_UVC(flow[flow_strides, flow_strides, 0]
                       , flow[flow_strides, flow_strides, 1]
-                      , mag[flow_strides, flow_strides] \
-                        *255/(np.max(mag)-np.min(mag)+EPS))
-        q_foe.set_UVC(flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 0]
-                      , flow[foeSlice_y,foeSlice_x][flow_strides, flow_strides, 1]
-                      , (mag[flow_strides, flow_strides]
-                         *255/(np.max(mag[foeSlice_y, foeSlice_x])
-                               -np.min(mag[foeSlice_y, foeSlice_x])+EPS)))
+                      , (mag[flow_strides, flow_strides] \
+                         *255/(np.max(mag)-np.min(mag)+EPS)))
         dispim = clrframe[..., ::-1]
     imdisp.set_data(dispim)
+
+    unitmag = 2*np.ones(foedisp.get_size())
+    foeKern = generateFoEkernel(foeW)
+    foeKern[foeW//2, foeW//2] = angle[foe_y,foe_x]
+    sim = (foeKern-angle[foeSlice_y,foeSlice_x])**2
+    X, Y = cv2.polarToCart(unitmag, angle[foeSlice_y,foeSlice_x].astype(np.float))
+    q_foe.set_UVC(X[1:-1:2, 1:-1:2], Y[1:-1:2, 1:-1:2]
+                  , (sim[1:-1:2, 1:-1:2] \
+                     *255/(np.max(sim)-np.min(sim)+EPS)))
 
     # shift the frame buffer
     frames[:-1] = frames[1:]; frames[-1] = currFrame
 
-    update.extend((b_latdiv, b_verdiv, b_ttc))
     return update
 
 
@@ -419,7 +452,7 @@ parser.add_option("--vis", dest="vis"
                   , type="str", default="quiver"
                   , help="Method for flow visualization.")
 parser.add_option("--flow-sparsity", dest="flow_sparsity"
-                  , type="int", default=15
+                  , type="int", default=10
                   , help="Rate at which to downsample image for display.")    
 parser.add_option("-q", "--quiet", dest="quiet"
                   , action="store_true", default=False
@@ -433,25 +466,31 @@ parser.add_option("--no-filter", dest="nofilt"
 #------------------------------------------------------------------------------#
 
 (opts, args) = parser.parse_args()
+
+
 if opts.video is not None:
     cap = cv2.VideoCapture(opts.video)
     startFrame = opts.start
     endFrame = int(cap.get(cv.CV_CAP_PROP_FRAME_COUNT)) \
                if opts.stop is None else opts.stop
     if startFrame != 0: cap.set(cv.CV_CAP_PROP_POS_FRAMES,startFrame)
-    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),0.5*opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
+    framegrabber= (decimate(cap.read()[1], opts.decimate) if opts.decimate > 1
+                   else cap.read()[1]
                    for framenum in range(startFrame, endFrame))
 elif opts.capture is not None:
     opts.show = True
     cap = cv2.VideoCapture(opts.capture)
     startFrame = 0
-    endFrame = 1000 if opts.stop is None else opts.stop
-    framegrabber= (cv2.GaussianBlur(cap.read()[1],(opts.decimate+1,opts.decimate+1),0.5*opts.decimate)[::opts.decimate,::opts.decimate,:].astype(np.uint8)
+    endFrame = 9999 if opts.stop is None else opts.stop
+    framegrabber= (decimate(cap.read()[1], opts.decimate) if opts.decimate > 1
+                   else cap.read()[1]                   
                    for framenum in range(startFrame, endFrame))
 elif opts.image:
     exit("No support currently")
     cap = None
-    framegrabber = (cv2.GaussianBlur(cv2.imread(imgpath),opts.decimate+1,opts.decimate)[::opts.decimate,::opts.decimate,:]
+    framegrabber = (decimate(cv2.imread(imgpath), opts.decimate)
+                    if opts.decimate>1
+                    else cv2.imread(imgpath)
                     for imgpath in args)
 else:
     exit("No input mode selected!")
@@ -467,6 +506,8 @@ for i in range(opts.frameavg):
     frames.append(cv2.cvtColor(framegrabber.next(), cv2.COLOR_BGR2GRAY))
 flowDataLen = endFrame - startFrame - 1 - (opts.frameavg-1)
 flowStartFrame = startFrame + 1 + (opts.frameavg-1)
+
+print frames[0].shape
 
 #------------------------------------------------------------------------------#
 # set up parameters for easy indexing into image
@@ -501,16 +542,16 @@ botRect = (startX, startY+int(0.5*maskH)), (stopX, stopY)
 
 flow = np.zeros((maskH, maskW, 2), np.float32)
 flowVals = np.zeros((3,flowDataLen), np.float32)
-params = {'pyr_scale': 0.5, 'levels': 4, 'winsize': 25
+params = {'pyr_scale': 0.5, 'levels': 4, 'winsize': 15
           , 'iterations': 10, 'poly_n': 7, 'poly_sigma': 1.2
-          , 'flags': cv2.OPTFLOW_FARNEBACK_GAUSSIAN}
+          , 'flags': 0}
 times = np.zeros(flowDataLen, np.float64)
 
 # create the FoE matched filter
 dt=4
 foeW = 15
 foeKern = generateFoEkernel(foeW).flatten()
-matchWin = lambda vec, axis, out: np.sum((vec-foeKern)**2, axis=axis, out=out)
+matchWin = lambda vec, axis, out: np.sum((np.delete(vec,foeW//2)-np.delete(foeKern,foeW//2))**2, axis=axis, out=out)
 
 history = np.zeros((3,15))
 w_forget = map(lambda x: 1-np.exp(-x/3.), np.arange(1,history.shape[1]+1))
@@ -519,20 +560,18 @@ w_forget = map(lambda x: 1-np.exp(-x/3.), np.arange(1,history.shape[1]+1))
 # Set up figure for interactive plotting
 #------------------------------------------------------------------------------#
 
-fig, imdisp, foedisp, b_latdiv, b_verdiv, b_ttc = setup_plot(np.zeros_like(frames[0]), np.zeros((foeW,foeW)))
+fig, imdisp, foedisp, b_latdiv, b_verdiv, b_ttc = setup_plot(np.zeros_like(frames[0])
+                                                             , np.zeros((foeW,foeW)))
 ax1, ax2, ax3, ax4, ax5 = fig.axes
 
 skiplines = opts.flow_sparsity
-flow_strides = slice(skiplines//2,-skiplines//2+1,skiplines)
+flow_strides = slice(skiplines//2,-skiplines//2,skiplines)
 
 if opts.vis == 'quiver':
-    X, Y, q_img = setup_quiver(ax1
-                               , Xspan=(startX, stopX), Yspan=(startY, stopY)
-                               , skiplines=skiplines, width=0.5)
-X, Y, q_foe = setup_quiver(ax2
-                           , Xspan=(0,foeW), Yspan=(0,foeW)
-                           , scale=1., skiplines=2
-                           , alpha=1, linewidth=0.25, width=0.25)
+    X, Y, q_img = setup_quiver(ax1, Xspan=(startX, stopX), Yspan=(startY, stopY)
+                               , skiplines=skiplines, width=2.25/opts.decimate)
+X, Y, q_foe = setup_quiver(ax2, Xspan=(0,foeW), Yspan=(0,foeW)
+                           , skiplines=2, alpha=1, linewidth=0.25, width=0.2)
 
 #------------------------------------------------------------------------------#
 # Run animation
