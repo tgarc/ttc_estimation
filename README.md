@@ -13,10 +13,12 @@ Basic building
 4. cd catkin_ws -> catkin_make
 
 Running tum_ardrone
+
 1. source /opt/ros/hydro/setup.bash
 2. source <tum-ardrone-workspace>/install/setup.bash
 
 Setting up virtualbox ssh server
+
 1. sudo apt-get install open-ssh
 2. Go to virtualbox main preferences
     i. Click network
@@ -37,9 +39,9 @@ network 192.168.56.0
 broadcast 192.168.56.255
 ```
 5. Open /etc/hosts _inside the host machine_ and enter the line
-'''
+```
 <IP>    <hostname>
-'''
+```
 
 Previous works
 --------------
