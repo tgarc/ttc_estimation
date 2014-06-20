@@ -28,13 +28,16 @@ Setting up virtualbox ssh server
     iii. Set "Attached to" to Host-Only Adapter
     iv. Restart machine
 4. Edit /etc/network/interfaces and add something similar to the following
-> auto eth1
+```
+auto eth1
 iface eth1 inet static
 address 192.168.56.2
 netmask 255.255.255.0
 network 192.168.56.0
 broadcast 192.168.56.255
-5. Open /etc/hosts _inside the host machine_ and enter the line ><IP>    <hostname>
+```
+5. Open /etc/hosts _inside the host machine_ and enter the line
+> <IP>    <hostname>
 
 Previous works
 --------------
