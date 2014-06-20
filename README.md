@@ -6,7 +6,9 @@ focus of expansion estimation + time to contact estimation algorithm.
 Notes on Robot Operating System (ROS) 
 -------------------------------------
 **Installation**
-1. Download ROS virtual machine at [[http://nootrix.com/downloads/#RosVM][RosVM]]
+
+1. Download ROS virtual machine at [RosVM](http://nootrix.com/downloads/#RosVM)
+
 **Basic building**
 
 1. Make sure paths ROS_PACKAGE_PATH is set
