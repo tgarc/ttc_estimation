@@ -23,14 +23,14 @@ Setting up virtualbox ssh server
 
 1. sudo apt-get install open-ssh
 2. Go to virtualbox main preferences
-  i. Click network
-  ii. Click Host-only networks tab
-  iii. Add an adapter
+  1. Click network
+  2. Click Host-only networks tab
+  3. Add an adapter
 3. Go to machine settings
-  i. Click network
-  ii. Click Adapter 2 tab
-  iii. Set "Attached to" to Host-Only Adapter
-  iv. Restart machine
+  1. Click network
+  2. Click Adapter 2 tab
+  3. Set "Attached to" to Host-Only Adapter
+  4. Restart machine
 4. Edit /etc/network/interfaces and add something similar to the following
 ```
 auto eth1
