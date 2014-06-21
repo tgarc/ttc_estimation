@@ -11,15 +11,28 @@ Notes on Robot Operating System (ROS)
 
 **Basic building**
 
-1. Make sure paths ROS_PACKAGE_PATH is set
-2. Create project folder (e.g., ~/catkin_ws)
-3. Place source of dependent projects in catkin_ws/src
-4. cd catkin_ws -> catkin_make
+1. Create project folder (e.g., ~/catkin_ws)
+2. Create a folder for dependent packages ~/catkin_ws/src
+3. Place source code into ~/catkin_ws/src with e.g. git clone <some_git_repo>
+4. Add each package into the package path by
+> export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:~/catkin_ws/src/<some_package>
+5. Make the packages with catkin
+```
+> cd ~/catkin_ws
+> catkin_make
+```
+6. Run catkin_make install (not sure this is entirely necessary)
+7. Set the path with setup.bash
+```
+source ~/catkin_ws/devel/setup.bash
+```
 
-**Running tum_ardrone**
-
-1. source /opt/ros/hydro/setup.bash
-2. source <tum-ardrone-workspace>/install/setup.bash
+Now the packages and launch files should be available. For example, for the tum_ardrone package you should now be able to run
+```
+roslaunch tum_ardrone ardrone_driver.launch
+roslaunch tum_ardrone tum_ardrone.launch
+```
+Good deal!
 
 
 Setting up virtualbox ssh server
