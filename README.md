@@ -14,7 +14,7 @@ Notes on Robot Operating System (ROS)
 1. Create project folder (e.g., ~/catkin_ws)
 2. Create a folder for dependent packages ~/catkin_ws/src
 3. Place source code into ~/catkin_ws/src with e.g. git clone <some_git_repo>
-4. Add each package into the package path by
+4. Add each package into the package path
 > export ROS_PACKAGE_PATH=$ROS_PACKAGE_PATH:~/catkin_ws/src/<some_package>
 5. Make the packages with catkin
 ```
